@@ -28,6 +28,13 @@ NOMINAL_FREQ     = 50.0
 CYCLE_SECONDS    = 86400  # simulate 1 full day per 24 h (wall-clock time)
 
 
+def _safe_float(val, default):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def logic(physical_values):
     physical_values["voltage_ac"]        = NOMINAL_VOLTAGE
     physical_values["current_ac"]        = 0.0
@@ -37,9 +44,10 @@ def logic(physical_values):
     physical_values["panel_temperature"] = 25.0
     physical_values["inverter_status"]   = False
     physical_values["fault_alarm"]       = False
-    # Inputs (written by outstation command handler, read here)
-    physical_values.setdefault("inverter_enable",   1)
-    physical_values.setdefault("power_curtailment", 100.0)
+    # hil.py pre-initialises all physical_values to "" before calling logic(),
+    # so setdefault does nothing. Explicitly set safe defaults for inputs.
+    physical_values["inverter_enable"]   = 1
+    physical_values["power_curtailment"] = 100.0
 
     Thread(target=_irradiance_sim,  args=(physical_values,), daemon=True).start()
     Thread(target=_electrical_sim,  args=(physical_values,), daemon=True).start()
@@ -71,8 +79,8 @@ def _electrical_sim(pv):
     voltage = NOMINAL_VOLTAGE
     while True:
         irradiance      = pv["solar_irradiance"]
-        inverter_enable = bool(int(float(pv.get("inverter_enable", 1))))
-        curtailment_pct = float(pv.get("power_curtailment", 100.0))
+        inverter_enable = bool(int(_safe_float(pv.get("inverter_enable", 1), 1)))
+        curtailment_pct = _safe_float(pv.get("power_curtailment", 100.0), 100.0)
         curtailment_pct = max(0.0, min(100.0, curtailment_pct))
 
         # Active power from solar model

@@ -286,45 +286,49 @@ def main():
 
     # have a single event loop for API polling (streamlit sucks for multi threaded stuff)
     while True:
-        try:
-            # poll hmi
-            for hmi, info in hmi_info.items():
-                hmi_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                hmi_table = create_register_table(hmi_response)
-                st_hmis[hmi].dataframe(hmi_table)
-            
-            # poll plc
-            for plc, info in plc_info.items():
-                plc_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                plc_table = create_register_table(plc_response)
-                st_plcs[plc].dataframe(plc_table)
+        # Poll each component independently — one failure does not block the rest.
+        # 2-second timeout prevents a hung container from stalling the entire loop.
+        for hmi, info in hmi_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_hmis[hmi].dataframe(create_register_table(r))
+            except Exception:
+                pass
 
-            # poll sensor
-            for sensor, info in sensor_info.items():
-                sensor_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                sensor_table = create_register_table(sensor_response)
-                st_sensors[sensor].dataframe(sensor_table)
+        for plc, info in plc_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_plcs[plc].dataframe(create_register_table(r))
+            except Exception:
+                pass
 
-            # poll actuator
-            for actuator, info in actuator_info.items():
-                actuator_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                actuator_table = create_register_table(actuator_response)
-                st_actuators[actuator].dataframe(actuator_table)
+        for sensor, info in sensor_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_sensors[sensor].dataframe(create_register_table(r))
+            except Exception:
+                pass
 
-            # poll DNP3 master (returns all outstation data in one call)
-            for master, info in dnp3_master_info.items():
-                master_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                master_table = create_register_table(master_response)
-                st_dnp3_masters[master].dataframe(master_table)
+        for actuator, info in actuator_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_actuators[actuator].dataframe(create_register_table(r))
+            except Exception:
+                pass
 
-            # poll DNP3 outstations directly
-            for outstation, info in dnp3_outstation_info.items():
-                outstation_response = requests.get(f"http://{info['ip']}:1111/registers").json()
-                outstation_table = create_register_table(outstation_response)
-                st_dnp3_outstations[outstation].dataframe(outstation_table)
-        except Exception:
-            # if an api endpoint cannot be reached, just wait until it can
-            time.sleep(1)
+        for master, info in dnp3_master_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_dnp3_masters[master].dataframe(create_register_table(r))
+            except Exception:
+                pass
+
+        for outstation, info in dnp3_outstation_info.items():
+            try:
+                r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
+                st_dnp3_outstations[outstation].dataframe(create_register_table(r))
+            except Exception:
+                pass
 
         # poll the physical hil (through the SQLite3 database)
         conn = sqlite3.connect("/src/physical_interactions.db")

@@ -72,7 +72,7 @@ def output_data(configs, physical_values):
             if physical_value["io"] == "output":
                 cursor.execute(f"INSERT INTO {table}(value, hil) VALUES(?, ?)", (physical_values[physical_value['name']], hil))
                 conn.commit()
-        time.sleep(0.3)
+        time.sleep(1.0)
 
 
 
@@ -92,8 +92,8 @@ def input_data(configs, physical_values):
                 conn.commit()
 
                 if value and value[0] not in (None, ""):
-                    physical_values[physical_value['name']] = int(float(value[0]))
-        time.sleep(0.3)
+                    physical_values[physical_value['name']] = float(value[0])
+        time.sleep(1.0)
 
 
 
