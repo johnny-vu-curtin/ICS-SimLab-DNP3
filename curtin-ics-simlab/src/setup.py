@@ -444,7 +444,7 @@ def build_dnp3_outstation_yaml(json_content):
             "container_name": container_name,
             "privileged": True,
             "volumes": volumes,
-            "ports": [f"{dnp3_port}:{dnp3_port}", 1111],
+            "ports": [1111],
             "command": ["python3", "-u", "dnp3_outstation.py"],
             "networks": {
                 docker_network: {"ipv4_address": ip}
