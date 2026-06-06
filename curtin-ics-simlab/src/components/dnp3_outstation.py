@@ -147,6 +147,7 @@ def poll_sqlite(configs, db_path, outstation, poll_interval=1.0):
     bi_map = {bi["physical_value"]: bi["index"] for bi in configs.get("binary_inputs", [])}
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute("PRAGMA busy_timeout = 2000;")  # wait up to 2s if hil.py holds the lock
 
     while True:
         try:

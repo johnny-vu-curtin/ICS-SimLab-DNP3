@@ -747,11 +747,7 @@ def create_communications(json_content):
     # create hardware SQLite database
     conn = sqlite3.connect(f"{root_path}/simulation/communications/physical_interactions.db")
     cursor = conn.cursor()
-
-    # WAL mode — required for concurrent reads from multiple DNP3 poll threads
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
-    conn.commit()
+    cursor.execute("PRAGMA synchronous = OFF;")
 
     # create tables for the HIL components in the SQLite database
     cursor.execute("CREATE TABLE hils (name TEXT PRIMARY KEY)")
