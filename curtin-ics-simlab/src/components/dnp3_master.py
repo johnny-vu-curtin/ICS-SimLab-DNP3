@@ -41,35 +41,36 @@ class SolarSOEHandler(opendnp3.ISOEHandler):
         super().__init__()
         self._name = outstation_name
 
-    def BeginFragment(self, result):
+    def Start(self):
         pass
 
-    def EndFragment(self, result):
+    def End(self):
         pass
 
     def Process(self, info, values):
-        # Dispatch to the correct type handler based on opendnp3 measurement type
         try:
-            # values is iterable; each element has .value and .index
-            for v in values:
-                self._store(info, v.value, v.index)
+            values.ForeachItem(lambda item: self._store(info, item.value, item.index))
         except Exception as e:
             logging.debug(f"SOE Process error [{self._name}]: {e}")
 
     def _store(self, info, measurement, index):
-        group = info.gv.group
-        # Group 30/32 → Analogue Input
-        if group in (30, 32):
-            self._update_by_index("analogue_input", index, float(measurement.value))
-        # Group 1/2 → Binary Input
-        elif group in (1, 2):
-            self._update_by_index("binary_input", index, bool(measurement.value))
-        # Group 10 → Binary Output Status
-        elif group == 10:
-            self._update_by_index("binary_output", index, bool(measurement.value))
-        # Group 40 → Analogue Output Status
-        elif group == 40:
-            self._update_by_index("analogue_output", index, float(measurement.value))
+        try:
+            # str(info.gv) → "GroupVariation.Group30Var1"; extract group number
+            gv_name = str(info.gv).rsplit(".", 1)[-1]   # "Group30Var1"
+            group = int(gv_name[5:].split("Var")[0])     # 30
+        except Exception:
+            return
+        try:
+            if group in (30, 32):
+                self._update_by_index("analogue_input", index, float(measurement.value))
+            elif group in (1, 2):
+                self._update_by_index("binary_input", index, bool(measurement.value))
+            elif group == 10:
+                self._update_by_index("binary_output", index, bool(measurement.value))
+            elif group in (40, 42):
+                self._update_by_index("analogue_output", index, float(measurement.value))
+        except Exception as e:
+            logging.debug(f"Store error [{self._name}]: {e}")
 
     def _update_by_index(self, data_type, index, value):
         with _data_lock:
@@ -79,23 +80,6 @@ class SolarSOEHandler(opendnp3.ISOEHandler):
                     entry["value"] = value
                     break
 
-    # Required overloads for all measurement types — route to Process
-    def Process_1(self, info, values): self.Process(info, values)
-    def Process_2(self, info, values): self.Process(info, values)
-    def Process_3(self, info, values): self.Process(info, values)
-    def Process_4(self, info, values): self.Process(info, values)
-    def Process_5(self, info, values): self.Process(info, values)
-    def Process_6(self, info, values): self.Process(info, values)
-    def Process_7(self, info, values): self.Process(info, values)
-    def Process_8(self, info, values): self.Process(info, values)
-    def Process_9(self, info, values): self.Process(info, values)
-    def Process_10(self, info, values): self.Process(info, values)
-    def Process_11(self, info, values): self.Process(info, values)
-    def Process_12(self, info, values): self.Process(info, values)
-    def Process_13(self, info, values): self.Process(info, values)
-    def Process_14(self, info, values): self.Process(info, values)
-    def Process_15(self, info, values): self.Process(info, values)
-    def Process_16(self, info, values): self.Process(info, values)
 
 
 # ---------------------------------------------------------------------------
@@ -117,14 +101,30 @@ class SolarMasterApplication(opendnp3.IMasterApplication):
         return False
 
     def OnReceiveIIN(self, iin):
-        if iin.LSB.DEVICE_RESTART:
-            logging.warning(f"Outstation {self._name} restarted — will re-enable unsolicited")
+        if iin.IsSet(opendnp3.IINBit.DEVICE_RESTART):
+            logging.warning(f"Outstation {self._name} restarted")
 
     def Now(self):
         return opendnp3.DNPTime(int(time.time() * 1000))
 
-    def GetTaskChangeHandler(self):
-        return opendnp3.ITaskCallback.Create()
+    def OnStateChange(self, state):
+        pass
+
+    def OnTaskStart(self, type, id):
+        pass
+
+    def OnTaskComplete(self, info):
+        pass
+
+    def OnKeepAliveInitiated(self):
+        pass
+
+    def OnKeepAliveFailure(self):
+        pass
+
+    def OnKeepAliveSuccess(self):
+        pass
+
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +189,9 @@ def build_master_connection(manager, master_config_entry, outstation_entry, poll
     )
 
     # Integrity poll (Class 0 — all static data)
-    integrity_scan = master.AddClassScan(
+    master.AddClassScan(
         opendnp3.ClassField.AllClasses(),
-        openpal.TimeDuration().Seconds(int(poll_interval_s))
+        openpal.TimeDuration.Seconds(int(poll_interval_s))
     )
 
     master.Enable()
@@ -200,7 +200,9 @@ def build_master_connection(manager, master_config_entry, outstation_entry, poll
         f"DNP3 Master connected to {name} at {ip}:{port} "
         f"(master={master_addr}, outstation={outstation_addr})"
     )
-    return master, channel
+    # Return soe_handler and application so caller keeps strong references —
+    # pybind11 only holds weak refs; GC would invalidate the virtual dispatch.
+    return master, channel, soe_handler, application
 
 
 # ---------------------------------------------------------------------------
@@ -273,16 +275,21 @@ def main():
 
     init_data_points(configs, outstation_configs)
 
-    manager = asiodnp3.DNP3Manager(1, asiodnp3.ConsoleLogger().Create())
+    n_outstations = len(configs.get("outstations", []))
+    manager = asiodnp3.DNP3Manager(max(1, n_outstations), asiodnp3.ConsoleLogger().Create())
 
     masters = []
     channels = []
+    soe_handlers = []
+    applications = []
     for outstation_entry in configs.get("outstations", []):
-        master, channel = build_master_connection(
+        master, channel, soe, app = build_master_connection(
             manager, configs, outstation_entry, poll_interval_s
         )
         masters.append(master)
         channels.append(channel)
+        soe_handlers.append(soe)
+        applications.append(app)
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()

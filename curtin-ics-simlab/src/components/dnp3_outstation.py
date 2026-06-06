@@ -228,7 +228,7 @@ def build_outstation(configs):
     channel = manager.AddTCPServer(
         "server",
         opendnp3.levels.NORMAL,
-        asiodnp3.ServerAcceptMode.CloseNew,
+        asiopal.ChannelRetry().Default(),
         "0.0.0.0",
         port,
         asiodnp3.PrintingChannelListener().Create()
@@ -242,14 +242,11 @@ def build_outstation(configs):
         numFrozenCounter=0,
         numBinaryOutputStatus=n_bo,
         numAnalogOutputStatus=n_ao,
-        numTimeAndInterval=0,
-        numOctetString=0
+        numTimeAndInterval=0
     )
 
-    stack_config = asiodnp3.OutstationStackConfig(
-        db_sizes,
-        opendnp3.EventBufferConfig.AllTypes(50)
-    )
+    stack_config = asiodnp3.OutstationStackConfig(db_sizes)
+    stack_config.outstation.eventBufferConfig = opendnp3.EventBufferConfig.AllTypes(50)
     stack_config.outstation.params.allowUnsolicited = True
     stack_config.link.LocalAddr = outstation_addr
     stack_config.link.RemoteAddr = master_addr
