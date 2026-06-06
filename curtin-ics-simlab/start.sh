@@ -1,11 +1,12 @@
 #!/bin/bash
 
-CONFIG=${1:-config/solar_plant}
-if [ ! -d "$CONFIG" ]; then
-    echo "Usage: $0 [config_directory]"
-    echo "Default: config/solar_plant"
+if [ -z "$1" ]; then
+    echo "Usage: $0 <config_directory>"
+    echo "Example: $0 config/solar_plant"
     exit 1
 fi
+
+CONFIG=$1
 
 #if [ "$EUID" -ne 0 ]; then
 #  echo "Please run this script with sudo:"
@@ -28,7 +29,7 @@ echo "ACTIVATING ENVIRONMENT"
 source .venv/bin/activate
 
 echo "BUILDING SIMULATION FILES"
-python3 main.py $CONFIG
+python3 main.py $1
 
 echo "DOCKER_COMPOSE BUILD"
 docker compose build 
