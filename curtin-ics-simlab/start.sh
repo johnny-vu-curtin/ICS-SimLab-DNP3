@@ -29,7 +29,7 @@ echo "BUILDING SIMULATION FILES"
 python3 main.py $1
 
 echo "DOCKER_COMPOSE BUILD"
-docker compose build
+docker compose build 
 
 echo "DOCKER_COMPOSE UP"
 docker compose up

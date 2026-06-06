@@ -134,7 +134,7 @@ def create_register_table(response):
 # FUNCTION: main
 # PURPOSE:  The main execution. Here we render everything to show on the web user interface.
 def main():
-    time.sleep(1)
+    time.sleep(10)
 
     # render the streamlit application
     st.set_page_config(
@@ -258,7 +258,7 @@ def main():
             time.sleep(1)
 
         # poll the physical hil (through the SQLite3 database)
-        conn = sqlite3.connect("physical_interactions.db")
+        conn = sqlite3.connect("/src/physical_interactions.db")
         for hil in hil_info.values():
             for physical_value in hil["values"]:
                 table = physical_value

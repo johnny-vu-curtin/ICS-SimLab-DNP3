@@ -16,10 +16,18 @@ if ! command -v socat &> /dev/null; then
     sudo apt install -y socat
 fi
 
-#if ! command -v tshark &> /dev/null; then
-#    echo "tshark is not installed. Installing..."
-#    sudo apt install -y tshark
-#fi
+if ! command -v tshark &> /dev/null; then
+    echo "tshark is not installed. Installing..."
+    sudo apt install -y tshark
+fi
+
+echo " INSTALL DUMPCAP"
+if [ ~ -d "/usr/bin/dumpcap" ]; then
+    sudo apt update && sudo apt install -y wireshark
+fi
+
+echo "INSTALL PIP"
+sudo apt install pip
 
 echo ""
 sudo chmod +x /usr/bin/dumpcap
@@ -32,6 +40,11 @@ docker compose down
 
 echo "PRUNING DOCKER"
 docker system prune -f
+
+echo "INSTALL PYTHON VIRTUAL ENVIRONMENT"
+sudo apt install python3.12-venv
+
+
 
 echo "CREATING PYTHON ENVIRONMENT"
 if [ ! -d ".venv" ]; then
