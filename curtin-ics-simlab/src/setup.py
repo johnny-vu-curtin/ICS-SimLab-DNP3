@@ -717,6 +717,9 @@ def create_containers(json_content, directory):
 
     # delete all existing container directories
     shutil.rmtree(f"{root_path}/simulation", ignore_errors=True)
+    # rmtree silently fails on root-owned Docker files — fall back to sudo
+    if Path(f"{root_path}/simulation").exists():
+        subprocess.run(["sudo", "rm", "-rf", f"{root_path}/simulation"], check=False)
     Path(f"{root_path}/simulation").mkdir()
     Path(f"{root_path}/simulation/containers").mkdir()
 

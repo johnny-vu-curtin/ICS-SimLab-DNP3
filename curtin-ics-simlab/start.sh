@@ -17,11 +17,11 @@ CONFIG=$1
 
 echo "ICS-SimLab STARTED"
 
-echo "REMOVING PREVIOUS DIRECTORIES"
-rm -r simulation
+echo "STOPPING PREVIOUS CONTAINERS"
+docker compose down 2>/dev/null || true
 
-#echo "Revoking sudo credentials..."
-#sudo -k
+echo "REMOVING PREVIOUS DIRECTORIES"
+sudo rm -rf simulation 2>/dev/null || rm -rf simulation 2>/dev/null || true
 
 docker system prune -f
 
@@ -29,10 +29,10 @@ echo "ACTIVATING ENVIRONMENT"
 source .venv/bin/activate
 
 echo "BUILDING SIMULATION FILES"
-python3 main.py $1
+python3 main.py $1 || { echo "ERROR: Setup failed. Exiting."; exit 1; }
 
 echo "DOCKER_COMPOSE BUILD"
-docker compose build 
+docker compose build
 
 echo "DOCKER_COMPOSE UP"
 docker compose up
