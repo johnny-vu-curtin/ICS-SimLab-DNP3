@@ -4,6 +4,15 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+
+# simulation artifacts (generated at runtime)
 simulation/containers/
 simulation/communications/
 docker-compose.yaml
+
+# large binary/data files
+*.pcap
+*.pcapng
+*.db
+data/pcap/
+data/datasets/
