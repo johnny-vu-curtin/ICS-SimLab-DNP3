@@ -1,3 +1,4 @@
+dnp3-python==0.3.0b2
 Flask==3.1.0
 jsonschema==4.23.0
 matplotlib==3.10.1

@@ -64,13 +64,15 @@ def get_component_info(configs):
     sensor_info = {}
     actuator_info = {}
     hil_info = {}
+    dnp3_master_info = {}
+    dnp3_outstation_info = {}
 
     if "hmis" in configs:
         for hmi in configs["hmis"]:
             hmi_info[hmi["name"]] = {
                 "ip": hmi["network"]["ip"]
             }
-            
+
     if "plcs" in configs:
         for plc in configs["plcs"]:
             plc_info[plc["name"]] = {
@@ -98,7 +100,19 @@ def get_component_info(configs):
                 "values": physical_values
             }
 
-    return hmi_info, plc_info, sensor_info, actuator_info, hil_info
+    if "dnp3_masters" in configs:
+        for master in configs["dnp3_masters"]:
+            dnp3_master_info[master["name"]] = {
+                "ip": master["network"]["ip"]
+            }
+
+    if "dnp3_outstations" in configs:
+        for outstation in configs["dnp3_outstations"]:
+            dnp3_outstation_info[outstation["name"]] = {
+                "ip": outstation["network"]["ip"]
+            }
+
+    return hmi_info, plc_info, sensor_info, actuator_info, hil_info, dnp3_master_info, dnp3_outstation_info
 
 
 
@@ -147,8 +161,23 @@ def main():
         configs = retrieve_configs("config.json")
 
         # get all component info. for Modbus (name, ip), for physical (column_name)
-        hmi_info, plc_info, sensor_info, actuator_info, hil_info = get_component_info(configs)
+        hmi_info, plc_info, sensor_info, actuator_info, hil_info, dnp3_master_info, dnp3_outstation_info = get_component_info(configs)
+        st.session_state['hmi_info'] = hmi_info
+        st.session_state['plc_info'] = plc_info
+        st.session_state['sensor_info'] = sensor_info
+        st.session_state['actuator_info'] = actuator_info
+        st.session_state['hil_info'] = hil_info
+        st.session_state['dnp3_master_info'] = dnp3_master_info
+        st.session_state['dnp3_outstation_info'] = dnp3_outstation_info
         st.session_state['config_loaded'] = True
+    else:
+        hmi_info = st.session_state['hmi_info']
+        plc_info = st.session_state['plc_info']
+        sensor_info = st.session_state['sensor_info']
+        actuator_info = st.session_state['actuator_info']
+        hil_info = st.session_state['hil_info']
+        dnp3_master_info = st.session_state['dnp3_master_info']
+        dnp3_outstation_info = st.session_state['dnp3_outstation_info']
 
     # render everything first  
     st.title("Industrial Control System Dashboard")
@@ -162,6 +191,10 @@ def main():
             st.write(f"Programmable Logic Controllers (PLCs): {len(plc_info)}")
             st.write(f"Sensors: {len(sensor_info)}")
             st.write(f"Actuators: {len(actuator_info)}")
+            if dnp3_master_info:
+                st.write(f"DNP3 Masters (SCADA): {len(dnp3_master_info)}")
+            if dnp3_outstation_info:
+                st.write(f"DNP3 Outstations (Inverters): {len(dnp3_outstation_info)}")
     st.divider()
 
     # show register devices
@@ -209,9 +242,33 @@ def main():
             st_actuators[actuator] = st.empty()
             column_switcher = (column_switcher % len(columns)) + 1
     
+    if dnp3_master_info:
+        st.header("DNP3 Masters (SCADA)", divider="blue")
+        col1, col2, col3, col4 = st.columns(4)
+        columns = {1: col1, 2: col2, 3: col3, 4: col4}
+        column_switcher = 1
+        st_dnp3_masters = {}
+        for master in dnp3_master_info:
+            with columns[column_switcher].container():
+                st.markdown(f"##### {master}")
+                st_dnp3_masters[master] = st.empty()
+                column_switcher = (column_switcher % len(columns)) + 1
+
+    if dnp3_outstation_info:
+        st.header("DNP3 Outstations (Inverters)", divider="blue")
+        col1, col2, col3, col4 = st.columns(4)
+        columns = {1: col1, 2: col2, 3: col3, 4: col4}
+        column_switcher = 1
+        st_dnp3_outstations = {}
+        for outstation in dnp3_outstation_info:
+            with columns[column_switcher].container():
+                st.markdown(f"##### {outstation}")
+                st_dnp3_outstations[outstation] = st.empty()
+                column_switcher = (column_switcher % len(columns)) + 1
+
     # create hardware in the loop graphs
     st.divider()
-    st.header("Hardware-in-the-Loops") 
+    st.header("Hardware-in-the-Loops")
     st.subheader("Physical Values") 
     hils = {}
     graphs = {}
@@ -253,6 +310,18 @@ def main():
                 actuator_response = requests.get(f"http://{info['ip']}:1111/registers").json()
                 actuator_table = create_register_table(actuator_response)
                 st_actuators[actuator].dataframe(actuator_table)
+
+            # poll DNP3 master (returns all outstation data in one call)
+            for master, info in dnp3_master_info.items():
+                master_response = requests.get(f"http://{info['ip']}:1111/registers").json()
+                master_table = create_register_table(master_response)
+                st_dnp3_masters[master].dataframe(master_table)
+
+            # poll DNP3 outstations directly
+            for outstation, info in dnp3_outstation_info.items():
+                outstation_response = requests.get(f"http://{info['ip']}:1111/registers").json()
+                outstation_table = create_register_table(outstation_response)
+                st_dnp3_outstations[outstation].dataframe(outstation_table)
         except Exception:
             # if an api endpoint cannot be reached, just wait until it can
             time.sleep(1)

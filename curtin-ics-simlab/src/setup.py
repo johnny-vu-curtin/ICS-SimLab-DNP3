@@ -73,10 +73,12 @@ def parse_json_to_yaml(directory, yaml_filename):
         sensors = build_sensor_yaml(json_content)
         actuators = build_actuator_yaml(json_content)
         hils = build_hil_yaml(json_content)
+        dnp3_outstations = build_dnp3_outstation_yaml(json_content)
+        dnp3_masters = build_dnp3_master_yaml(json_content)
 
         # create the YAML file
         parsed_json_content = {
-            "services": ui | hmis | plcs | sensors | actuators | hils,
+            "services": ui | hmis | plcs | sensors | actuators | hils | dnp3_outstations | dnp3_masters,
             "networks": networks,
         }
 
@@ -419,6 +421,64 @@ def build_hil_yaml(json_content):
 
 ################################################################################
 
+# FUNCTION: build_dnp3_outstation_yaml
+# PURPOSE:  Builds the docker-compose section for each DNP3 outstation (solar inverter)
+def build_dnp3_outstation_yaml(json_content):
+    root_path = Path(__file__).resolve().parent.parent
+    json_outstations = {}
+    if "dnp3_outstations" not in json_content: return {}
+
+    for outstation in json_content["dnp3_outstations"]:
+        container_name = outstation["name"]
+        build = f"{root_path}/simulation/containers/{container_name}"
+        ip = outstation["network"]["ip"]
+        docker_network = outstation["network"]["docker_network"]
+        dnp3_port = outstation.get("port", 20000)
+
+        volumes = [
+            f"{root_path}/simulation/communications/physical_interactions.db:/src/physical_interactions.db"
+        ]
+
+        json_outstations[container_name] = {
+            "build": build,
+            "container_name": container_name,
+            "privileged": True,
+            "volumes": volumes,
+            "ports": [f"{dnp3_port}:{dnp3_port}", 1111],
+            "command": ["python3", "-u", "dnp3_outstation.py"],
+            "networks": {
+                docker_network: {"ipv4_address": ip}
+            }
+        }
+    return json_outstations
+
+
+# FUNCTION: build_dnp3_master_yaml
+# PURPOSE:  Builds the docker-compose section for the DNP3 master (SCADA)
+def build_dnp3_master_yaml(json_content):
+    root_path = Path(__file__).resolve().parent.parent
+    json_masters = {}
+    if "dnp3_masters" not in json_content: return {}
+
+    for master in json_content["dnp3_masters"]:
+        container_name = master["name"]
+        build = f"{root_path}/simulation/containers/{container_name}"
+        ip = master["network"]["ip"]
+        docker_network = master["network"]["docker_network"]
+
+        json_masters[container_name] = {
+            "build": build,
+            "container_name": container_name,
+            "privileged": True,
+            "ports": [1111],
+            "command": ["python3", "-u", "dnp3_master.py"],
+            "networks": {
+                docker_network: {"ipv4_address": ip}
+            }
+        }
+    return json_masters
+
+
 # FUNCTION: build_ui_directory
 # PURPOSE:  Creates the ui directory
 def build_ui_directory(json_content):
@@ -582,6 +642,73 @@ def build_hil_directory(json_content, directory):
         shutil.copy(f"{root_path}/src/components/utils.py", f"{root_path}/simulation/containers/{hil['name']}/src")
 
 
+# FUNCTION: build_dnp3_outstation_directory
+# PURPOSE:  Creates the container directory for each DNP3 outstation
+def build_dnp3_outstation_directory(json_content, directory):
+    root_path = Path(__file__).resolve().parent.parent
+    if "dnp3_outstations" not in json_content: return
+
+    for outstation in json_content["dnp3_outstations"]:
+        name = outstation["name"]
+        Path(f"{root_path}/simulation/containers/{name}").mkdir()
+        Path(f"{root_path}/simulation/containers/{name}/src").mkdir()
+        shutil.copy(
+            f"{root_path}/src/docker-files/dnp3/Dockerfile",
+            f"{root_path}/simulation/containers/{name}"
+        )
+
+        # Config passed to the outstation component
+        json_config = {
+            "outstation_address": outstation["outstation_address"],
+            "master_address":     outstation["master_address"],
+            "port":               outstation.get("port", 20000),
+            "hil":                outstation["hil"],
+            "analogue_inputs":    outstation.get("analogue_inputs", []),
+            "binary_inputs":      outstation.get("binary_inputs", []),
+            "binary_outputs":     outstation.get("binary_outputs", []),
+            "analogue_outputs":   outstation.get("analogue_outputs", []),
+        }
+        with open(f"{root_path}/simulation/containers/{name}/src/config.json", "w") as f:
+            f.write(json.dumps(json_config, indent=4))
+
+        shutil.copy(
+            f"{root_path}/src/components/dnp3_outstation.py",
+            f"{root_path}/simulation/containers/{name}/src"
+        )
+
+
+# FUNCTION: build_dnp3_master_directory
+# PURPOSE:  Creates the container directory for the DNP3 master (SCADA)
+def build_dnp3_master_directory(json_content, directory):
+    root_path = Path(__file__).resolve().parent.parent
+    if "dnp3_masters" not in json_content: return
+
+    for master in json_content["dnp3_masters"]:
+        name = master["name"]
+        Path(f"{root_path}/simulation/containers/{name}").mkdir()
+        Path(f"{root_path}/simulation/containers/{name}/src").mkdir()
+        shutil.copy(
+            f"{root_path}/src/docker-files/dnp3/Dockerfile",
+            f"{root_path}/simulation/containers/{name}"
+        )
+
+        # Config passed to the master component — includes outstation detail for data point init
+        json_config = {
+            "master_address":    master["master_address"],
+            "outstations":       master.get("outstations", []),
+            "poll_interval_s":   master.get("poll_interval_s", 5),
+            "unsolicited":       master.get("unsolicited", True),
+            "dnp3_outstations":  json_content.get("dnp3_outstations", []),
+        }
+        with open(f"{root_path}/simulation/containers/{name}/src/config.json", "w") as f:
+            f.write(json.dumps(json_config, indent=4))
+
+        shutil.copy(
+            f"{root_path}/src/components/dnp3_master.py",
+            f"{root_path}/simulation/containers/{name}/src"
+        )
+
+
 # FUNCTION: create_containers
 # PURPOSE:  Builds the directory containers for the main components of the simulation. These
 #           include the PLCs, HMIs, and the sensors and actuators.
@@ -600,6 +727,8 @@ def create_containers(json_content, directory):
     build_sensor_directory(json_content)
     build_actuator_directory(json_content, directory)
     build_hil_directory(json_content, directory)
+    build_dnp3_outstation_directory(json_content, directory)
+    build_dnp3_master_directory(json_content, directory)
     
     
 # FUNCTION: create_communications
@@ -615,12 +744,11 @@ def create_communications(json_content):
     # create hardware SQLite database
     conn = sqlite3.connect(f"{root_path}/simulation/communications/physical_interactions.db")
     cursor = conn.cursor()
-    cursor.execute("PRAGMA synchronous = OFF;")
 
-    # optimise db for speed
-    #cursor.execute("PRAGMA journal_mode=WAL;")
-    #cursor.execute("PRAGMA synchronous=NORMAL;")
-    #conn.commit()
+    # WAL mode — required for concurrent reads from multiple DNP3 poll threads
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+    conn.commit()
 
     # create tables for the HIL components in the SQLite database
     cursor.execute("CREATE TABLE hils (name TEXT PRIMARY KEY)")
