@@ -95,7 +95,10 @@ def get_component_info(configs):
         for hil in configs["hils"]:
             physical_values = []
             for physical_value in hil["physical_values"]:
-                physical_values.append(physical_value["name"])
+                # Only chart "output" values — inputs are written by external components
+                # (e.g. DNP3 outstation commands) and only have data when commands are sent.
+                if physical_value.get("io") == "output":
+                    physical_values.append(physical_value["name"])
             hil_info[hil["name"]] = {
                 "values": physical_values
             }
