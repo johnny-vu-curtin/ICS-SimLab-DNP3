@@ -25,7 +25,7 @@ PANEL_EFFICIENCY = 0.18   # 18 % monocrystalline
 PANEL_AREA_M2    = 50.0   # total panel area per inverter
 NOMINAL_VOLTAGE  = 230.0
 NOMINAL_FREQ     = 50.0
-CYCLE_SECONDS    = 86400  # simulate 1 full day per 24 h (wall-clock time)
+CYCLE_SECONDS    = 300    # 1 full day cycle in 5 minutes (demo visibility)
 
 
 def _safe_float(val, default):
@@ -54,10 +54,11 @@ def logic(physical_values):
 
 
 def _irradiance_sim(pv):
-    # Sinusoidal day/night: peak at t = 12 h, zero outside 6 h – 18 h window.
+    # Map cycle position (0..CYCLE_SECONDS) → hour of day (0..24) regardless of cycle length.
+    # Peak irradiance at hour=12, zero outside 6 h – 18 h window.
     while True:
         t = time.time()
-        hour = (t % CYCLE_SECONDS) / 3600.0  # 0–24, wraps each CYCLE_SECONDS seconds
+        hour = (t % CYCLE_SECONDS) / CYCLE_SECONDS * 24.0
 
         # Bell curve centred at noon (hour=12), width σ≈2 h → realistic daylight envelope
         raw = 1000.0 * math.exp(-0.5 * ((hour - 12.0) / 2.5) ** 2)
