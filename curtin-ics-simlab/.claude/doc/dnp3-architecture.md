@@ -112,18 +112,6 @@ Class 1/2 events trigger unsolicited responses. Class 3 events are polled.
 
 ---
 
-## SAv5 authentication
-
-Implement as a **toggle in configuration.json** (`dnp3_security.sav5_enabled`).
-
-- Default: `false` (disabled) — matches most real-world legacy deployments.
-- When `true`: HMAC-SHA256 challenge-response on all application-layer messages.
-- Research purpose: generate two dataset variants (with/without auth) for comparative IDS evaluation.
-
-Do not implement SAv5 in the first iteration. Add the config key as a stub so it can be enabled later without changing the JSON schema.
-
----
-
 ## SQLite interaction (outstation)
 
 Outstation reads physical values from SQLite every poll cycle:

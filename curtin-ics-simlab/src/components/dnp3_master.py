@@ -10,7 +10,7 @@ import json
 import time
 import logging
 import threading
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 try:
     from pydnp3 import asiodnp3, asiopal, opendnp3, openpal
@@ -28,8 +28,32 @@ app = Flask(__name__)
 _data_points = {}
 _data_lock = threading.Lock()
 
-# Index: outstation_address -> outstation_name (for routing SOE callbacks)
-_addr_to_name = {}
+# Lookup: outstation_name → master object (for command dispatch)
+_masters = {}
+
+
+def _parse_gv(gv) -> tuple:
+    """Map a GroupVariation to (data_type, is_float). Returns (None, None) if unknown.
+
+    Handles both 'GroupVariation.Group30Var1' and 'Group30Var1' string formats
+    so the parser doesn't break if dnp3-python changes its repr in a future release.
+    """
+    s = str(gv)
+    try:
+        # rsplit strips any "Foo." prefix: "GroupVariation.Group30Var1" → "Group30Var1"
+        s = s.rsplit(".", 1)[-1]
+        group = int(s[5:].split("Var")[0])
+    except (ValueError, IndexError):
+        return None, None
+    if group in (30, 32):
+        return "analogue_input", True
+    if group in (1, 2):
+        return "binary_input", False
+    if group == 10:
+        return "binary_output", False
+    if group in (40, 42):
+        return "analogue_output", True
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -54,21 +78,12 @@ class SolarSOEHandler(opendnp3.ISOEHandler):
             logging.debug(f"SOE Process error [{self._name}]: {e}")
 
     def _store(self, info, measurement, index):
-        try:
-            # str(info.gv) → "GroupVariation.Group30Var1"; extract group number
-            gv_name = str(info.gv).rsplit(".", 1)[-1]   # "Group30Var1"
-            group = int(gv_name[5:].split("Var")[0])     # 30
-        except Exception:
+        data_type, is_float = _parse_gv(info.gv)
+        if data_type is None:
             return
         try:
-            if group in (30, 32):
-                self._update_by_index("analogue_input", index, float(measurement.value))
-            elif group in (1, 2):
-                self._update_by_index("binary_input", index, bool(measurement.value))
-            elif group == 10:
-                self._update_by_index("binary_output", index, bool(measurement.value))
-            elif group in (40, 42):
-                self._update_by_index("analogue_output", index, float(measurement.value))
+            value = float(measurement.value) if is_float else bool(measurement.value)
+            self._update_by_index(data_type, index, value)
         except Exception as e:
             logging.debug(f"Store error [{self._name}]: {e}")
 
@@ -150,6 +165,65 @@ def get_outstation_registers(outstation_name):
 
 def run_flask():
     app.run(host="0.0.0.0", port=1111)
+
+
+# ---------------------------------------------------------------------------
+# Command callback — logs DirectOperate result asynchronously
+# ---------------------------------------------------------------------------
+class _CommandCallback(opendnp3.ICommandCallback):
+    def __init__(self, label):
+        super().__init__()
+        self._label = label
+
+    def OnComplete(self, result):
+        logging.info(f"DirectOperate result [{self._label}]: {result.summary}")
+
+
+@app.route("/command/<outstation_name>", methods=["POST"])
+def send_command(outstation_name):
+    """Send a DNP3 DirectOperate command to an outstation.
+
+    Body JSON:
+      { "type": "binary_output"|"analogue_output", "index": <int>, "value": <number> }
+
+    Returns 200 immediately (fire-and-forget); result is logged in container stdout.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    cmd_type = body.get("type")
+    index    = body.get("index")
+    value    = body.get("value")
+
+    if cmd_type is None or index is None or value is None:
+        return jsonify({"error": "required fields: type, index, value"}), 400
+
+    master = _masters.get(outstation_name)
+    if master is None:
+        return jsonify({"error": f"unknown outstation: {outstation_name}"}), 404
+
+    label = f"{outstation_name}:{cmd_type}[{index}]={value}"
+    try:
+        if cmd_type == "binary_output":
+            code = opendnp3.ControlCode.LATCH_ON if int(value) else opendnp3.ControlCode.LATCH_OFF
+            master.DirectOperate(
+                opendnp3.ControlRelayOutputBlock(code),
+                int(index),
+                _CommandCallback(label)
+            )
+        elif cmd_type == "analogue_output":
+            master.DirectOperate(
+                opendnp3.AnalogOutputDouble64(float(value)),
+                int(index),
+                _CommandCallback(label)
+            )
+        else:
+            return jsonify({"error": f"unsupported type: {cmd_type}"}), 400
+    except Exception as e:
+        logging.error(f"DirectOperate failed [{label}]: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    logging.info(f"DirectOperate queued: {label}")
+    return jsonify({"queued": True, "outstation": outstation_name,
+                    "type": cmd_type, "index": index, "value": value})
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +364,7 @@ def main():
         channels.append(channel)
         soe_handlers.append(soe)
         applications.append(app)
+        _masters[outstation_entry["name"]] = master
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()

@@ -7,6 +7,7 @@
 # Also exposes a REST API on port 1111 for the Streamlit dashboard.
 
 import json
+import re
 import time
 import logging
 import sqlite3
@@ -25,6 +26,14 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 app = Flask(__name__)
+
+# Table names come from config physical_value fields. Validate before use in SQL
+# to prevent injection if config is ever supplied from an untrusted source.
+_VALID_TABLE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$')
+
+
+def _is_valid_table(name: str) -> bool:
+    return bool(_VALID_TABLE_RE.match(name))
 
 # Shared state — populated by DNP3 callbacks and SQLite reads
 _data_points = {}   # { physical_value: {"type": ..., "index": ..., "value": ...} }
@@ -98,6 +107,9 @@ class SolarCommandHandler(opendnp3.ICommandHandler):
         return opendnp3.CommandStatus.SUCCESS
 
     def _write_to_db(self, table, value):
+        if not _is_valid_table(table):
+            logging.warning(f"Rejected DB write — invalid table name: {table!r}")
+            return
         try:
             conn = sqlite3.connect(self._db_path)
             hil = self._configs.get("hil", "solar_hil")
@@ -143,11 +155,18 @@ class SolarOutstationApplication(opendnp3.IOutstationApplication):
 # SQLite polling — reads physical values and pushes them to DNP3 database
 # ---------------------------------------------------------------------------
 def poll_sqlite(configs, db_path, outstation, poll_interval=1.0):
-    ai_map = {ai["physical_value"]: ai["index"] for ai in configs.get("analogue_inputs", [])}
-    bi_map = {bi["physical_value"]: bi["index"] for bi in configs.get("binary_inputs", [])}
+    ai_map      = {ai["physical_value"]: ai["index"]               for ai in configs.get("analogue_inputs", [])}
+    ai_deadband = {ai["physical_value"]: float(ai.get("deadband", 0.0)) for ai in configs.get("analogue_inputs", [])}
+    bi_map      = {bi["physical_value"]: bi["index"]               for bi in configs.get("binary_inputs", [])}
+
+    # Validate all table names once at startup; skip any that are malformed.
+    ai_map = {pv: idx for pv, idx in ai_map.items() if _is_valid_table(pv)}
+    bi_map = {pv: idx for pv, idx in bi_map.items() if _is_valid_table(pv)}
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA busy_timeout = 2000;")  # wait up to 2s if hil.py holds the lock
+
+    _last_ai = {}   # pv → last value pushed to DNP3; used for deadband gating
 
     while True:
         try:
@@ -160,15 +179,19 @@ def poll_sqlite(configs, db_path, outstation, poll_interval=1.0):
                 ).fetchone()
                 if row and row[0] not in (None, ""):
                     val = float(row[0])
-                    builder.Update(
-                        opendnp3.Analog(val, opendnp3.Flags(opendnp3.AnalogQuality.ONLINE)),
-                        idx,
-                        opendnp3.EventMode.Detect
-                    )
-                    with _data_lock:
-                        if pv in _data_points:
-                            _data_points[pv]["value"] = round(val, 4)
-                    updated = True
+                    last = _last_ai.get(pv)
+                    # Only push update when change exceeds configured deadband
+                    if last is None or abs(val - last) >= ai_deadband.get(pv, 0.0):
+                        builder.Update(
+                            opendnp3.Analog(val, opendnp3.Flags(opendnp3.AnalogQuality.ONLINE)),
+                            idx,
+                            opendnp3.EventMode.Detect
+                        )
+                        _last_ai[pv] = val
+                        with _data_lock:
+                            if pv in _data_points:
+                                _data_points[pv]["value"] = round(val, 4)
+                        updated = True
 
             for pv, idx in bi_map.items():
                 row = conn.execute(

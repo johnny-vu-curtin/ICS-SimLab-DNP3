@@ -82,10 +82,7 @@ Fields:
     ],
     "analogue_outputs": [
       { "index": 0, "physical_value": "power_curtailment" }
-    ],
-    "dnp3_security": {
-      "sav5_enabled": false
-    }
+    ]
   }
 ]
 ```
@@ -94,7 +91,6 @@ Fields:
 - `outstation_address` — unique DNP3 link-layer address per inverter.
 - `hil` — name of the HIL that drives this outstation's physical values in SQLite.
 - `analogue_inputs[].deadband` — value change threshold that triggers a Class 1/2 event.
-- `dnp3_security.sav5_enabled` — stub for future SAv5 toggle; always `false` in v1.
 
 Multiple inverters: duplicate the object with a different `name`, `ip`, and `outstation_address`.
 

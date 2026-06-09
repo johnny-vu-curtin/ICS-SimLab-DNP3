@@ -25,7 +25,7 @@ PANEL_EFFICIENCY = 0.18   # 18 % monocrystalline
 PANEL_AREA_M2    = 50.0   # total panel area per inverter
 NOMINAL_VOLTAGE  = 230.0
 NOMINAL_FREQ     = 50.0
-CYCLE_SECONDS    = 300    # 1 full day cycle in 5 minutes (demo visibility)
+CYCLE_SECONDS    = 60     # 1 full day cycle in 60 seconds (demo visibility)
 
 
 def _safe_float(val, default):
@@ -37,7 +37,7 @@ def _safe_float(val, default):
 
 def logic(physical_values):
     physical_values["voltage_ac"]        = NOMINAL_VOLTAGE
-    physical_values["current_ac"]        = 0.0
+    physical_values["current_ac"]        = 0.0 # ample
     physical_values["active_power"]      = 0.0
     physical_values["frequency"]         = NOMINAL_FREQ
     physical_values["solar_irradiance"]  = 0.0

@@ -52,10 +52,7 @@
       ],
       "analogue_outputs": [
         { "index": 0, "physical_value": "power_curtailment" }
-      ],
-      "dnp3_security": {
-        "sav5_enabled": false
-      }
+      ]
     },
     {
       "name": "inverter_2",
@@ -84,10 +81,7 @@
       ],
       "analogue_outputs": [
         { "index": 0, "physical_value": "power_curtailment" }
-      ],
-      "dnp3_security": {
-        "sav5_enabled": false
-      }
+      ]
     }
   ],
 
