@@ -108,7 +108,7 @@ Full API reference: https://github.com/VOLTTRON/dnp3-python/tree/main/docs
 
 ## Known issues
 
-- `dnp3-python` is still in beta (`0.3.0b2` as of Nov 2024). API may change between minor versions. Pin the version in requirements: `dnp3-python==0.3.0b2`.
+- `dnp3-python` is still in beta (`0.3.0b2` as of Nov 2024). API may change between minor versions. Pin the version in `src/docker-files/dnp3/Dockerfile` (`dnp3-python==0.3.0b2`) — do NOT add it to the host `requirements.txt`, since the host runs Python 3.12 and has no compatible wheel.
 - The library imports as `pydnp3` (not `dnp3_python`) — this is intentional; it wraps the same opendnp3 internal namespace.
 - Time synchronisation (Group 50) requires the master to call `PerformTimeSync()` after connection — not automatic.
 - Unsolicited responses must be explicitly enabled by the master after the initial integrity poll.

@@ -12,14 +12,16 @@ Existing Modbus fields (`plcs`, `hmis`, `sensors`, `actuators`, `hils`, `serial_
 ```json
 {
   "ui":              { ... },           // unchanged from Modbus
-  "dnp3_masters":    [ ... ],           // NEW: SCADA master(s)
-  "dnp3_outstations": [ ... ],          // NEW: inverters / RTUs
-  "attackers":       [ ... ],           // NEW: attack containers (optional)
+  "dnp3_masters":    [ ... ],           // SCADA master(s)
+  "dnp3_outstations": [ ... ],          // inverters / RTUs
   "hils":            [ ... ],           // unchanged, drives physical values
-  "ip_networks":     [ ... ],           // now requires vlan_it + vlan_ot
+  "ip_networks":     [ ... ],           // single vlan_ot network (current)
   "serial_networks": []                 // empty for DNP3 (no RTU serial links)
 }
 ```
+
+`"attackers": [ ... ]` is a planned key (Activity 2, not yet implemented) — see
+the `attackers` section below.
 
 ---
 
@@ -35,8 +37,8 @@ Existing Modbus fields (`plcs`, `hmis`, `sensors`, `actuators`, `hils`, `serial_
     },
     "master_address": 1,
     "outstations": [
-      { "name": "inverter_1", "ip": "192.168.0.20", "outstation_address": 10 },
-      { "name": "inverter_2", "ip": "192.168.0.21", "outstation_address": 11 }
+      { "name": "inverter_1", "ip": "192.168.0.20", "outstation_address": 10, "port": 20000 },
+      { "name": "inverter_2", "ip": "192.168.0.21", "outstation_address": 11, "port": 20000 }
     ],
     "poll_interval_s": 5,
     "unsolicited": true
@@ -64,6 +66,7 @@ Fields:
     },
     "outstation_address": 10,
     "master_address": 1,
+    "port": 20000,
     "hil": "solar_hil",
     "analogue_inputs": [
       { "index": 0, "physical_value": "voltage_ac",         "deadband": 1.0  },
@@ -96,7 +99,9 @@ Multiple inverters: duplicate the object with a different `name`, `ip`, and `out
 
 ---
 
-## attackers
+## attackers (planned — Activity 2, not yet implemented)
+
+Not present in the current `config/solar_plant/configuration.json`. Proposed schema:
 
 ```json
 "attackers": [
@@ -119,10 +124,26 @@ Multiple inverters: duplicate the object with a different `name`, `ip`, and `out
 - Attacker starts in `vlan_it`. Attack scripts route to `vlan_ot` targets.
 - `logic` — Python file in `config/<scenario>/logic/` containing attack behaviour.
 - `master_address` — rogue master address (must differ from legitimate master).
+- Requires the two-network `ip_networks` layout shown below. There is no
+  `src/setup.py` build function for this component type yet.
 
 ---
 
-## ip_networks — two networks required
+## ip_networks
+
+### Current (single `vlan_ot` network)
+
+```json
+"ip_networks": [
+  {
+    "docker_name": "vlan_ot",
+    "name": "ics_ot_network",
+    "subnet": "192.168.0.0/24"
+  }
+]
+```
+
+### Planned (Activity 2 — two networks, for `attackers`)
 
 ```json
 "ip_networks": [
@@ -139,7 +160,7 @@ Multiple inverters: duplicate the object with a different `name`, `ip`, and `out
 ]
 ```
 
-`scada` (dnp3_master) is assigned IPs on both networks — it bridges IT and OT.
+`scada` (dnp3_master) would be assigned IPs on both networks — it bridges IT and OT.
 
 ---
 
@@ -150,6 +171,10 @@ Multiple inverters: duplicate the object with a different `name`, `ip`, and `out
   {
     "name": "solar_hil",
     "logic": "solar_hil_logic.py",
+    "network": {
+      "ip": "192.168.0.30",
+      "docker_network": "vlan_ot"
+    },
     "physical_values": [
       { "name": "voltage_ac",        "io": "output" },
       { "name": "current_ac",        "io": "output" },

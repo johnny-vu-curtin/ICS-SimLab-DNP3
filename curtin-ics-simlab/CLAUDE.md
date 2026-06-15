@@ -58,21 +58,43 @@ It is the single shared physical state bus — all components read/write through
 
 ---
 
-## DNP3 additions (in progress)
+## DNP3 additions
 
-Three new component types being added:
+**Phase 1 (complete)** — `dnp3_master` (SCADA) and `dnp3_outstation` (solar inverter) communicate over DNP3-TCP in the new `config/solar_plant/` scenario.
 
-| Type              | Role              | DNP3 role   |
-|-------------------|-------------------|-------------|
-| `dnp3_master`     | SCADA controller  | Master      |
-| `dnp3_outstation` | Solar inverter    | Outstation  |
-| `attacker`        | Attack simulator  | Rogue master|
+| Type              | Role              | DNP3 role   | Status                |
+|-------------------|-------------------|-------------|-----------------------|
+| `dnp3_master`     | SCADA controller  | Master      | Implemented           |
+| `dnp3_outstation` | Solar inverter    | Outstation  | Implemented           |
+| `attacker`        | Attack simulator  | Rogue master| Planned (Activity 2)  |
 
-New scenario: `config/solar_plant/`
+Run it like any other scenario:
+
+```bash
+python3 main.py config/solar_plant
+docker compose build
+docker compose up
+```
+
+### REST API additions (port 1111)
+
+| Component         | Endpoint                            | Purpose                                    |
+|--------------------|--------------------------------------|---------------------------------------------|
+| `dnp3_outstation` | `GET /registers`                     | Current data point values (dashboard)      |
+| `dnp3_master`     | `GET /registers`                     | Flattened values across all outstations    |
+| `dnp3_master`     | `GET /registers/<outstation_name>`   | Values for one outstation                  |
+| `dnp3_master`     | `POST /command/<outstation_name>`    | DirectOperate — `{"type": "binary_output"\|"analogue_output", "index": int, "value": number}` |
+
+### Test suite
+
+```bash
+pytest tests/unit/          # no Docker required — pydnp3 mocked via conftest.py
+pytest tests/integration/   # requires `docker compose up -d`; auto-skips if stack not running
+```
 
 → Architecture + data mapping: `.claude/doc/dnp3-architecture.md`
 → Config JSON format: `.claude/doc/solar-plant-config.md`
-→ Attack support requirements: `.claude/doc/attack-support.md`
+→ Attack support requirements (Activity 2): `.claude/doc/attack-support.md`
 → Library selection + Docker constraints: `.claude/doc/library-notes.md`
 
 ---
@@ -98,14 +120,21 @@ Schema reference: `.claude/doc/solar-plant-config.md`
 
 ## Critical constraints — read before touching DNP3 code
 
-- **DNP3 library**: use `dnp3-python` (VOLTTRON/PNNL) only.
+- **DNP3 library**: use `dnp3-python` (VOLTTRON/PNNL) only, pinned to `dnp3-python==0.3.0b2`.
   `pydnp3` is abandoned (last release 2018, requires Python 2.7 headers — will not build).
+  Installed only inside `src/docker-files/dnp3/Dockerfile` — NOT in host `requirements.txt`
+  (host runs Python 3.12, which has no compatible wheel).
 - **Docker base image for DNP3 containers**: `ubuntu:22.04` + Python 3.10 or 3.11.
   `dnp3-python` has no wheel for Python 3.12 on Ubuntu 24.04.
-- **SQLite WAL mode**: must be enabled for DNP3 high-frequency polling.
-  Currently commented out at `src/setup.py:622` — uncomment before DNP3 work.
-- **Network topology**: DNP3 simulation requires two Docker networks (`vlan_it`, `vlan_ot`).
-  Single-network topology cannot model IT→OT lateral movement for attack datasets.
+- **SQLite concurrency**: WAL mode was tried and reverted — it broke existing Modbus
+  scenarios. Current approach is `PRAGMA synchronous = OFF` (`src/setup.py`) plus
+  `PRAGMA busy_timeout = 2000` in the outstation's poll loop
+  (`src/components/dnp3_outstation.py`). Sufficient for 2 outstations @ 5 s poll
+  interval — revisit if polling frequency increases significantly.
+- **Network topology**: `config/solar_plant` currently runs on a single `vlan_ot`
+  network (192.168.0.0/24) — scada master, both outstations, HIL, and UI.
+  The two-network `vlan_it`/`vlan_ot` split for `attacker` + IT→OT lateral movement
+  is planned for Activity 2, not yet implemented.
 - **Port 20000**: IANA-registered DNP3-TCP default. Do not change without updating all configs.
 
 ---

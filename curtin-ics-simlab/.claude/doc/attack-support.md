@@ -20,6 +20,27 @@ Attack scripts are NOT implemented in Activity 1. This document defines what the
 
 ---
 
+## Phase 1 status (what's already in place)
+
+The Phase 1 test suite (`tests/integration/test_dnp3_comms.py`, tests S-01..S-03)
+already confirms three of the baselines that Activity 2 attack scripts will exploit:
+
+- **S-01** — `POST /command/<outstation_name>` on the master is unauthenticated.
+- **S-02** — SQLite accepts direct writes to any `<physical_value_name>` table, with
+  no validation that the writer is a legitimate HIL/outstation.
+- **S-03** — `/registers` exposes full operational state with no access control.
+
+Two gaps remain before attacks #6 and #7 can be implemented:
+- Outstation `WarmRestartSupport`/`ColdRestartSupport` return `RestartMode.UNSUPPORTED`
+  — FC 0x07/0x0D are not yet handled (attack #6).
+- Outstation `WriteAbsoluteTime()` is a stub — it logs the received time but does not
+  store or reuse it for Group 32 event timestamps (attack #7).
+
+Realistic noise model for attack #9 is already implemented in
+`config/solar_plant/logic/solar_hil_logic.py` (irradiance, voltage, frequency noise).
+
+---
+
 ## What the DNP3 implementation MUST expose for each attack
 
 ### Attacks 1, 2, 8 — Replay / Spoofing / UR manipulation

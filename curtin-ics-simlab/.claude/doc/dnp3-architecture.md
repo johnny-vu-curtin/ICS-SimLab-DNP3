@@ -18,11 +18,14 @@
 - Sends unsolicited responses on Class 1/2 events (threshold-based).
 - Exposes REST API on port 1111 for Streamlit dashboard.
 
-### attacker
+### attacker (planned — Activity 2, not yet implemented)
 - One per simulation (optional — omit from config to disable).
 - Sits in `vlan_it` network, simulates a rogue DNP3 master.
 - Attack logic loaded from `config/<scenario>/logic/attack_logic.py`.
 - Does NOT expose REST API — for dataset generation only.
+- Requires the two-network topology described below. Not present in the
+  current `config/solar_plant/configuration.json`, which uses a single
+  `vlan_ot` network.
 
 ---
 
@@ -47,6 +50,21 @@ Analogue Input events (Group 32) with timestamps are generated when values cross
 
 ## Network topology
 
+### Current (Phase 1, implemented)
+
+```
+vlan_ot  192.168.0.0/24
+┌────────────────────────────────────────┐
+│  ui                    192.168.0.5      │
+│  scada (dnp3_master)   192.168.0.10     │
+│  inverter_1 (dnp3_outstation) .20       │
+│  inverter_2 (dnp3_outstation) .21       │
+│  solar_hil             192.168.0.30     │
+└────────────────────────────────────────┘
+```
+
+### Planned (Activity 2 — attacker support, not yet implemented)
+
 ```
 vlan_it  192.168.1.0/24          vlan_ot  192.168.0.0/24
 ┌──────────────────────┐         ┌──────────────────────────────┐
@@ -57,7 +75,7 @@ vlan_it  192.168.1.0/24          vlan_ot  192.168.0.0/24
                                  └──────────────────────────────┘
 ```
 
-`scada` bridges both networks. `attacker` starts in `vlan_it`; attack scripts pivot into `vlan_ot`.
+`scada` would bridge both networks. `attacker` starts in `vlan_it`; attack scripts pivot into `vlan_ot`.
 
 ---
 
@@ -112,6 +130,24 @@ Class 1/2 events trigger unsolicited responses. Class 3 events are polled.
 
 ---
 
+## Phase 1 implementation status
+
+What the function-code / object-group tables above require for **full** attack
+support (Activity 2) vs. what `dnp3_master.py` / `dnp3_outstation.py` implement today:
+
+| Feature                            | Status                                                                         |
+|-------------------------------------|---------------------------------------------------------------------------------|
+| FC 0x01 Read / Class 0–3 polls      | Implemented — `master.AddClassScan(ClassField.AllClasses(), ...)`              |
+| FC 0x03/0x04 Direct Operate         | Implemented — `SolarCommandHandler.Operate()` (CROB + AnalogOutput*)           |
+| Unsolicited responses (FC 0x82)     | Implemented — `allowUnsolicited=True`, `EventMode.Detect` + per-point deadband |
+| Group 30/32 Analogue Input (+Event) | Implemented                                                                    |
+| Group 1/2 Binary Input (+Event)     | Implemented                                                                    |
+| Group 12 CROB / Group 41 AO         | Implemented                                                                    |
+| FC 0x07/0x0D Warm/Cold Restart      | Not implemented — `WarmRestartSupport`/`ColdRestartSupport` return `RestartMode.UNSUPPORTED` (needed for attack #6) |
+| Group 50 Time sync (Write)          | Stub only — `WriteAbsoluteTime()` logs and returns `True`; value is not stored or reused (needed for attack #7) |
+
+---
+
 ## SQLite interaction (outstation)
 
 Outstation reads physical values from SQLite every poll cycle:
@@ -127,8 +163,12 @@ Control commands write back:
 INSERT INTO <physical_value_name> (value, hil) VALUES (?, ?)
 ```
 
-**WAL mode must be enabled** before DNP3 work. Uncomment in `src/setup.py:622`:
+**Concurrency**: WAL mode was tried and reverted — it broke existing Modbus
+scenarios. Instead, the outstation's poll loop (`src/components/dnp3_outstation.py`)
+sets a busy timeout on its own connection:
 ```python
-cursor.execute("PRAGMA journal_mode=WAL;")
-cursor.execute("PRAGMA synchronous=NORMAL;")
+conn.execute("PRAGMA busy_timeout = 2000;")  # wait up to 2s if hil.py holds the lock
 ```
+combined with the framework default `PRAGMA synchronous = OFF` set in `src/setup.py`
+when the database is created. Sufficient for 2 outstations @ 5 s poll interval —
+revisit if polling frequency increases significantly.
