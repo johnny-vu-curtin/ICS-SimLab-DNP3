@@ -1,0 +1,213 @@
+{
+  "ui": {
+    "network": {
+      "ip": "192.168.0.5",
+      "port": 8501,
+      "docker_network": "vlan_ot"
+    }
+  },
+
+  "dnp3_masters": [
+    {
+      "name": "scada",
+      "network": {
+        "ip": "192.168.0.10",
+        "docker_network": "vlan_ot"
+      },
+      "master_address": 1,
+      "outstations": [
+        { "name": "inverter_1", "ip": "192.168.0.20", "outstation_address": 10, "port": 20000 },
+        { "name": "inverter_2", "ip": "192.168.0.21", "outstation_address": 11, "port": 20000 },
+        { "name": "inverter_3", "ip": "192.168.0.22", "outstation_address": 12, "port": 20000 },
+        { "name": "inverter_4", "ip": "192.168.0.23", "outstation_address": 13, "port": 20000 },
+        { "name": "inverter_5", "ip": "192.168.0.24", "outstation_address": 14, "port": 20000 }
+      ],
+      "poll_interval_s": 5,
+      "unsolicited": true
+    }
+  ],
+
+  "dnp3_outstations": [
+    {
+      "name": "inverter_1",
+      "network": { "ip": "192.168.0.20", "docker_network": "vlan_ot" },
+      "outstation_address": 10,
+      "master_address": 1,
+      "port": 20000,
+      "hil": "solar_hil",
+      "analogue_inputs": [
+        { "index": 0, "physical_value": "voltage_ac",        "deadband": 1.0  },
+        { "index": 1, "physical_value": "current_ac",        "deadband": 0.1  },
+        { "index": 2, "physical_value": "active_power",      "deadband": 10.0 },
+        { "index": 3, "physical_value": "frequency",         "deadband": 0.05 },
+        { "index": 4, "physical_value": "solar_irradiance",  "deadband": 5.0  },
+        { "index": 5, "physical_value": "panel_temperature", "deadband": 0.5  },
+        { "index": 6, "physical_value": "grid_voltage",      "deadband": 1.0  },
+        { "index": 7, "physical_value": "grid_frequency",    "deadband": 0.02 }
+      ],
+      "binary_inputs": [
+        { "index": 0, "physical_value": "inverter_status" },
+        { "index": 1, "physical_value": "fault_alarm"     },
+        { "index": 2, "physical_value": "grid_connected"  }
+      ],
+      "binary_outputs": [
+        { "index": 0, "physical_value": "inverter_enable" }
+      ],
+      "analogue_outputs": [
+        { "index": 0, "physical_value": "power_curtailment" }
+      ]
+    },
+    {
+      "name": "inverter_2",
+      "network": { "ip": "192.168.0.21", "docker_network": "vlan_ot" },
+      "outstation_address": 11,
+      "master_address": 1,
+      "port": 20000,
+      "hil": "solar_hil",
+      "analogue_inputs": [
+        { "index": 0, "physical_value": "voltage_ac",        "deadband": 1.0  },
+        { "index": 1, "physical_value": "current_ac",        "deadband": 0.1  },
+        { "index": 2, "physical_value": "active_power",      "deadband": 10.0 },
+        { "index": 3, "physical_value": "frequency",         "deadband": 0.05 },
+        { "index": 4, "physical_value": "solar_irradiance",  "deadband": 5.0  },
+        { "index": 5, "physical_value": "panel_temperature", "deadband": 0.5  },
+        { "index": 6, "physical_value": "grid_voltage",      "deadband": 1.0  },
+        { "index": 7, "physical_value": "grid_frequency",    "deadband": 0.02 }
+      ],
+      "binary_inputs": [
+        { "index": 0, "physical_value": "inverter_status" },
+        { "index": 1, "physical_value": "fault_alarm"     },
+        { "index": 2, "physical_value": "grid_connected"  }
+      ],
+      "binary_outputs": [
+        { "index": 0, "physical_value": "inverter_enable" }
+      ],
+      "analogue_outputs": [
+        { "index": 0, "physical_value": "power_curtailment" }
+      ]
+    },
+    {
+      "name": "inverter_3",
+      "network": { "ip": "192.168.0.22", "docker_network": "vlan_ot" },
+      "outstation_address": 12,
+      "master_address": 1,
+      "port": 20000,
+      "hil": "solar_hil",
+      "analogue_inputs": [
+        { "index": 0, "physical_value": "voltage_ac",        "deadband": 1.0  },
+        { "index": 1, "physical_value": "current_ac",        "deadband": 0.1  },
+        { "index": 2, "physical_value": "active_power",      "deadband": 10.0 },
+        { "index": 3, "physical_value": "frequency",         "deadband": 0.05 },
+        { "index": 4, "physical_value": "solar_irradiance",  "deadband": 5.0  },
+        { "index": 5, "physical_value": "panel_temperature", "deadband": 0.5  },
+        { "index": 6, "physical_value": "grid_voltage",      "deadband": 1.0  },
+        { "index": 7, "physical_value": "grid_frequency",    "deadband": 0.02 }
+      ],
+      "binary_inputs": [
+        { "index": 0, "physical_value": "inverter_status" },
+        { "index": 1, "physical_value": "fault_alarm"     },
+        { "index": 2, "physical_value": "grid_connected"  }
+      ],
+      "binary_outputs": [
+        { "index": 0, "physical_value": "inverter_enable" }
+      ],
+      "analogue_outputs": [
+        { "index": 0, "physical_value": "power_curtailment" }
+      ]
+    },
+    {
+      "name": "inverter_4",
+      "network": { "ip": "192.168.0.23", "docker_network": "vlan_ot" },
+      "outstation_address": 13,
+      "master_address": 1,
+      "port": 20000,
+      "hil": "solar_hil",
+      "analogue_inputs": [
+        { "index": 0, "physical_value": "voltage_ac",        "deadband": 1.0  },
+        { "index": 1, "physical_value": "current_ac",        "deadband": 0.1  },
+        { "index": 2, "physical_value": "active_power",      "deadband": 10.0 },
+        { "index": 3, "physical_value": "frequency",         "deadband": 0.05 },
+        { "index": 4, "physical_value": "solar_irradiance",  "deadband": 5.0  },
+        { "index": 5, "physical_value": "panel_temperature", "deadband": 0.5  },
+        { "index": 6, "physical_value": "grid_voltage",      "deadband": 1.0  },
+        { "index": 7, "physical_value": "grid_frequency",    "deadband": 0.02 }
+      ],
+      "binary_inputs": [
+        { "index": 0, "physical_value": "inverter_status" },
+        { "index": 1, "physical_value": "fault_alarm"     },
+        { "index": 2, "physical_value": "grid_connected"  }
+      ],
+      "binary_outputs": [
+        { "index": 0, "physical_value": "inverter_enable" }
+      ],
+      "analogue_outputs": [
+        { "index": 0, "physical_value": "power_curtailment" }
+      ]
+    },
+    {
+      "name": "inverter_5",
+      "network": { "ip": "192.168.0.24", "docker_network": "vlan_ot" },
+      "outstation_address": 14,
+      "master_address": 1,
+      "port": 20000,
+      "hil": "solar_hil",
+      "analogue_inputs": [
+        { "index": 0, "physical_value": "voltage_ac",        "deadband": 1.0  },
+        { "index": 1, "physical_value": "current_ac",        "deadband": 0.1  },
+        { "index": 2, "physical_value": "active_power",      "deadband": 10.0 },
+        { "index": 3, "physical_value": "frequency",         "deadband": 0.05 },
+        { "index": 4, "physical_value": "solar_irradiance",  "deadband": 5.0  },
+        { "index": 5, "physical_value": "panel_temperature", "deadband": 0.5  },
+        { "index": 6, "physical_value": "grid_voltage",      "deadband": 1.0  },
+        { "index": 7, "physical_value": "grid_frequency",    "deadband": 0.02 }
+      ],
+      "binary_inputs": [
+        { "index": 0, "physical_value": "inverter_status" },
+        { "index": 1, "physical_value": "fault_alarm"     },
+        { "index": 2, "physical_value": "grid_connected"  }
+      ],
+      "binary_outputs": [
+        { "index": 0, "physical_value": "inverter_enable" }
+      ],
+      "analogue_outputs": [
+        { "index": 0, "physical_value": "power_curtailment" }
+      ]
+    }
+  ],
+
+  "hils": [
+    {
+      "name": "solar_hil",
+      "logic": "solar_hil_logic.py",
+      "network": {
+        "ip": "192.168.0.30",
+        "docker_network": "vlan_ot"
+      },
+      "physical_values": [
+        { "name": "voltage_ac",        "io": "output" },
+        { "name": "current_ac",        "io": "output" },
+        { "name": "active_power",      "io": "output" },
+        { "name": "frequency",         "io": "output" },
+        { "name": "solar_irradiance",  "io": "output" },
+        { "name": "panel_temperature", "io": "output" },
+        { "name": "inverter_status",   "io": "output" },
+        { "name": "fault_alarm",       "io": "output" },
+        { "name": "grid_connected",    "io": "output" },
+        { "name": "grid_voltage",      "io": "output" },
+        { "name": "grid_frequency",    "io": "output" },
+        { "name": "inverter_enable",   "io": "input"  },
+        { "name": "power_curtailment", "io": "input"  }
+      ]
+    }
+  ],
+
+  "ip_networks": [
+    {
+      "docker_name": "vlan_ot",
+      "name": "ics_ot_network",
+      "subnet": "192.168.0.0/24"
+    }
+  ],
+
+  "serial_networks": []
+}

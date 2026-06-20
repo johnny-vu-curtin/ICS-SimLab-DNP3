@@ -134,6 +134,8 @@ PHYSICAL_VALUE_UNITS = {
     "transformer_voltage":         "V",
     "household_power":             "W",
     "solar_power":                 "W",
+    "grid_voltage":                "V",
+    "grid_frequency":              "Hz",
     "tank_level_value":            "%",
     "bottle_level_value":          "%",
     "bottle_distance_to_filler_value": "mm",
