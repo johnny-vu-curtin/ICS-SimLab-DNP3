@@ -132,6 +132,14 @@ Class 1/2 events trigger unsolicited responses. Class 3 events are polled.
 
 ## Phase 1 implementation status
 
+**Status: complete, tagged `v0.1-dnp3-basic` (commit `9d1aa98`).** Verified end-to-end
+with a live Wireshark capture on the `ics_ot_network` interface (`tcp.port == 20000`):
+master ↔ outstation Class 0123 integrity polls every 5 s, plus unsolicited responses on
+deadband crossing — both correctly Confirmed on the wire. (An earlier build of
+`dnp3_master.py` crashed on startup — `class _CommandCallback(opendnp3.ICommandCallback)`
+subclassed an interface that doesn't exist in `dnp3-python==0.3.0b2`; fixed by passing a
+plain `Callable[[ICommandTaskResult], None]` to `DirectOperate()` instead.)
+
 What the function-code / object-group tables above require for **full** attack
 support (Activity 2) vs. what `dnp3_master.py` / `dnp3_outstation.py` implement today:
 

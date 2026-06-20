@@ -22,6 +22,9 @@ Attack scripts are NOT implemented in Activity 1. This document defines what the
 
 ## Phase 1 status (what's already in place)
 
+**Phase 1 is complete and tagged `v0.1-dnp3-basic` (commit `9d1aa98`)** — master/outstation
+communication verified live via Wireshark capture on `ics_ot_network` (`tcp.port == 20000`).
+
 The Phase 1 test suite (`tests/integration/test_dnp3_comms.py`, tests S-01..S-03)
 already confirms three of the baselines that Activity 2 attack scripts will exploit:
 

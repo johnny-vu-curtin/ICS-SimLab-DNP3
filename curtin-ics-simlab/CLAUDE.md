@@ -60,7 +60,7 @@ It is the single shared physical state bus — all components read/write through
 
 ## DNP3 additions
 
-**Phase 1 (complete)** — `dnp3_master` (SCADA) and `dnp3_outstation` (solar inverter) communicate over DNP3-TCP in the new `config/solar_plant/` scenario.
+**Phase 1 (complete, tagged `v0.1-dnp3-basic`)** — `dnp3_master` (SCADA) and `dnp3_outstation` (solar inverter) communicate over DNP3-TCP in the new `config/solar_plant/` scenario. Verified with a live Wireshark capture on the `ics_ot_network` interface (`tcp.port == 20000`): Class 0123 integrity polls every 5 s plus unsolicited responses on deadband crossing, both Confirmed correctly.
 
 | Type              | Role              | DNP3 role   | Status                |
 |-------------------|-------------------|-------------|-----------------------|
