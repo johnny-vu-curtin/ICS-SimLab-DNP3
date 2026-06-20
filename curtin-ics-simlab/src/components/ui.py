@@ -388,18 +388,21 @@ def main():
         for hil in hil_info.values():
             for physical_value in hil["values"]:
                 table = physical_value
+                unit = get_unit(table)
                 df = pd.read_sql_query(f"SELECT value FROM {table} ORDER BY timestamp DESC LIMIT 1", conn)
                 df["physical_value"] = table
-                hils[physical_value].dataframe(df, column_order=["physical_value", "value"])
+                df["unit"] = unit
+                hils[physical_value].dataframe(df, column_order=["physical_value", "value", "unit"])
 
                 df = pd.read_sql_query(f"SELECT timestamp, value FROM {table} ORDER BY timestamp DESC LIMIT 100", conn)
                 df["timestamp"] = pd.to_datetime(df["timestamp"])
                 df["value"] = pd.to_numeric(df["value"])
                 df_grouped = df.groupby('timestamp')[["value"]].mean()
-                
+
+                y_title = f"Value ({unit})" if unit else "Value"
                 chart = alt.Chart(df_grouped.reset_index(), height=325).mark_line().encode(
                     x=alt.X("timestamp:T", title="Time", axis=alt.Axis(format="%M:%S")),
-                    y=alt.Y("value:Q", title="Value"),
+                    y=alt.Y("value:Q", title=y_title),
                 )
 
                 graphs[physical_value].altair_chart(chart)
