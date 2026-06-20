@@ -119,14 +119,62 @@ def get_component_info(configs):
 
 
 
+# Engineering unit per physical value name. DNP3 master responses prefix the key
+# with the outstation name (e.g. "inverter_1.voltage_ac") — get_unit() strips that
+# prefix before lookup.
+PHYSICAL_VALUE_UNITS = {
+    "voltage_ac":                  "V",
+    "current_ac":                  "A",
+    "active_power":                "W",
+    "frequency":                   "Hz",
+    "solar_irradiance":            "W/m²",
+    "panel_temperature":           "°C",
+    "power_curtailment":           "W",
+    "output_voltage":              "V",
+    "transformer_voltage":         "V",
+    "household_power":             "W",
+    "solar_power":                 "W",
+    "tank_level_value":            "%",
+    "bottle_level_value":          "%",
+    "bottle_distance_to_filler_value": "mm",
+}
+
+# Keyword fallback for physical values not in PHYSICAL_VALUE_UNITS above
+# (covers naming variations without needing an exact-match entry per scenario).
+PHYSICAL_VALUE_UNIT_KEYWORDS = [
+    ("voltage", "V"),
+    ("current", "A"),
+    ("power", "W"),
+    ("frequency", "Hz"),
+    ("irradiance", "W/m²"),
+    ("temperature", "°C"),
+]
+
+
+# FUNCTION: get_unit
+# PURPOSE:  Looks up the engineering unit for a physical value name. Returns ""
+#           for booleans/states/positions or anything not recognised.
+def get_unit(physical_value_name):
+    # DNP3 master keys are "outstation_name.physical_value" — match on the suffix
+    name = physical_value_name.rsplit(".", 1)[-1]
+    if name in PHYSICAL_VALUE_UNITS:
+        return PHYSICAL_VALUE_UNITS[name]
+    for keyword, unit in PHYSICAL_VALUE_UNIT_KEYWORDS:
+        if keyword in name:
+            return unit
+    return ""
+
+
+
 # FUNCTION: create_register_table_rows
 # PURPOSE:  Builds up the table rows for the component registers
-def create_register_table_rows(type, address, count, value, response):
-    for register in response.values():
+def create_register_table_rows(type, address, count, value, unit, response):
+    for name, register in response.items():
         type.append(register["type"])
         address.append(register["address"])
         count.append(register["count"])
         value.append(register["value"])
+        unit.append(get_unit(name))
 
 
 
@@ -137,12 +185,14 @@ def create_register_table(response):
     address = []
     count = []
     value = []
-    create_register_table_rows(type, address, count, value, response)
+    unit = []
+    create_register_table_rows(type, address, count, value, unit, response)
     dataframe = pd.DataFrame({
             "type": type,
             "address": address,
             "count": count,
-            "value": value
+            "value": value,
+            "unit": unit
         })
     return dataframe.astype(str)
 
