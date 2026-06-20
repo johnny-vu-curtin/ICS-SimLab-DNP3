@@ -168,15 +168,15 @@ def run_flask():
 
 
 # ---------------------------------------------------------------------------
-# Command callback — logs DirectOperate result asynchronously
+# Command callback — logs DirectOperate result asynchronously.
+# dnp3-python's DirectOperate() takes a plain callable (Callable[[ICommandTaskResult],
+# None]), not a subclass of an ICommandCallback interface — that interface does not
+# exist in this library version.
 # ---------------------------------------------------------------------------
-class _CommandCallback(opendnp3.ICommandCallback):
-    def __init__(self, label):
-        super().__init__()
-        self._label = label
-
-    def OnComplete(self, result):
-        logging.info(f"DirectOperate result [{self._label}]: {result.summary}")
+def _make_command_callback(label):
+    def _on_complete(result):
+        logging.info(f"DirectOperate result [{label}]: {result.summary}")
+    return _on_complete
 
 
 @app.route("/command/<outstation_name>", methods=["POST"])
@@ -207,13 +207,13 @@ def send_command(outstation_name):
             master.DirectOperate(
                 opendnp3.ControlRelayOutputBlock(code),
                 int(index),
-                _CommandCallback(label)
+                _make_command_callback(label)
             )
         elif cmd_type == "analogue_output":
             master.DirectOperate(
                 opendnp3.AnalogOutputDouble64(float(value)),
                 int(index),
-                _CommandCallback(label)
+                _make_command_callback(label)
             )
         else:
             return jsonify({"error": f"unsupported type: {cmd_type}"}), 400
