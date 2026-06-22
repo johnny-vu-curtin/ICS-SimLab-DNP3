@@ -96,6 +96,8 @@ pytest tests/integration/   # requires `docker compose up -d`; auto-skips if sta
 → Config JSON format: `.claude/doc/solar-plant-config.md`
 → Attack support requirements (Activity 2): `.claude/doc/attack-support.md`
 → Library selection + Docker constraints: `.claude/doc/library-notes.md`
+→ Physical correlation rules for `config/solar_plant` HIL logic: `.claude/doc/rules_logic-solar_plant.md`
+  — read before changing any simulation logic in `solar_hil_logic.py`
 
 ### Comment convention for DNP3 code
 
