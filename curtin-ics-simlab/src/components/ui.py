@@ -103,12 +103,16 @@ def get_component_info(configs):
                 "values": physical_values
             }
 
+    # Author: Van Sanh Vu, Purpose: DNP3 development
+    # PURPOSE: Collects DNP3 master (SCADA) container info for dashboard display
     if "dnp3_masters" in configs:
         for master in configs["dnp3_masters"]:
             dnp3_master_info[master["name"]] = {
                 "ip": master["network"]["ip"]
             }
 
+    # Author: Van Sanh Vu, Purpose: DNP3 development
+    # PURPOSE: Collects DNP3 outstation (inverter) container info for dashboard display
     if "dnp3_outstations" in configs:
         for outstation in configs["dnp3_outstations"]:
             dnp3_outstation_info[outstation["name"]] = {
@@ -247,6 +251,8 @@ def main():
             st.write(f"Programmable Logic Controllers (PLCs): {len(plc_info)}")
             st.write(f"Sensors: {len(sensor_info)}")
             st.write(f"Actuators: {len(actuator_info)}")
+            # Author: Van Sanh Vu, Purpose: DNP3 development
+            # PURPOSE: Shows DNP3 master/outstation counts in the device summary panel
             if dnp3_master_info:
                 st.write(f"DNP3 Masters (SCADA): {len(dnp3_master_info)}")
             if dnp3_outstation_info:
@@ -298,6 +304,8 @@ def main():
             st_actuators[actuator] = st.empty()
             column_switcher = (column_switcher % len(columns)) + 1
     
+    # Author: Van Sanh Vu, Purpose: DNP3 development
+    # PURPOSE: Renders one dashboard tile per DNP3 master (SCADA) container
     if dnp3_master_info:
         st.header("DNP3 Masters (SCADA)", divider="blue")
         col1, col2, col3, col4 = st.columns(4)
@@ -310,6 +318,8 @@ def main():
                 st_dnp3_masters[master] = st.empty()
                 column_switcher = (column_switcher % len(columns)) + 1
 
+    # Author: Van Sanh Vu, Purpose: DNP3 development
+    # PURPOSE: Renders one dashboard tile per DNP3 outstation (inverter) container
     if dnp3_outstation_info:
         st.header("DNP3 Outstations (Inverters)", divider="blue")
         col1, col2, col3, col4 = st.columns(4)
@@ -372,6 +382,8 @@ def main():
             except Exception:
                 pass
 
+        # Author: Van Sanh Vu, Purpose: DNP3 development
+        # PURPOSE: Polls each DNP3 master's REST API and refreshes its dashboard table
         for master, info in dnp3_master_info.items():
             try:
                 r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
@@ -379,6 +391,8 @@ def main():
             except Exception:
                 pass
 
+        # Author: Van Sanh Vu, Purpose: DNP3 development
+        # PURPOSE: Polls each DNP3 outstation's REST API and refreshes its dashboard table
         for outstation, info in dnp3_outstation_info.items():
             try:
                 r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
