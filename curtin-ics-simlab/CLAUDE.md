@@ -98,6 +98,8 @@ pytest tests/integration/   # requires `docker compose up -d`; auto-skips if sta
 → Library selection + Docker constraints: `.claude/doc/library-notes.md`
 → Physical correlation rules for `config/solar_plant` HIL logic: `.claude/doc/rules_logic-solar_plant.md`
   — read before changing any simulation logic in `solar_hil_logic.py`
+→ Physical correlation rules for `config/solar_plant_500kw` HIL logic (grid-tie model):
+  `.claude/doc/rules_logic-solar_plant_500kw.md` — read this first, it builds on the rules above
 
 ### Comment convention for DNP3 code
 
