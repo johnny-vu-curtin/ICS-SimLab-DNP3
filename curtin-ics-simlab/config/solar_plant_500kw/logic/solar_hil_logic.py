@@ -40,6 +40,8 @@ NOMINAL_GRID_FREQ    = 50.0
 CYCLE_SECONDS      = 60      # 1 full day cycle in 60 seconds (demo visibility)
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Safely coerces a value to float, falling back to a default on failure
 def _safe_float(val, default):
     try:
         return float(val)
@@ -47,6 +49,8 @@ def _safe_float(val, default):
         return float(default)
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Initialises HIL physical values and starts the irradiance/electrical/grid sim threads
 def logic(physical_values):
     physical_values["voltage_ac"]        = NOMINAL_VOLTAGE
     physical_values["current_ac"]        = 0.0
@@ -69,6 +73,8 @@ def logic(physical_values):
     Thread(target=_grid_sim,       args=(physical_values,), daemon=True).start()
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Simulates a 24h solar irradiance/temperature cycle in a background thread
 def _irradiance_sim(pv):
     # Map cycle position (0..CYCLE_SECONDS) → hour of day (0..24) regardless of cycle length.
     # Peak irradiance at hour=12, zero outside 6 h – 18 h window.
@@ -92,6 +98,9 @@ def _irradiance_sim(pv):
         time.sleep(1.0)
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Simulates inverter electrical output (power/voltage/current/frequency/fault),
+#          sized for ~100 kW peak per inverter
 def _electrical_sim(pv):
     voltage = NOMINAL_VOLTAGE
     while True:
@@ -129,6 +138,8 @@ def _electrical_sim(pv):
         time.sleep(1.0)
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Simulates point-of-common-coupling grid measurements (connected/voltage/frequency)
 def _grid_sim(pv):
     # Point-of-common-coupling measurements — independent of inverter-side
     # voltage_ac/frequency above, modelling the stiffer LV grid bus.
