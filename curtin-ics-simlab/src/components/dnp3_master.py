@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
 # FILE PURPOSE: DNP3 Master component — models a SCADA controller.
 # Connects to one or more DNP3 Outstations (solar inverters) over TCP.
 # Performs periodic Class 0 integrity polls and receives unsolicited responses.
@@ -32,7 +33,6 @@ _data_lock = threading.Lock()
 _masters = {}
 
 
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Maps a GroupVariation to (data_type, is_float). Returns (None, None) if unknown.
 def _parse_gv(gv) -> tuple:
     """Map a GroupVariation to (data_type, is_float). Returns (None, None) if unknown.
@@ -61,7 +61,6 @@ def _parse_gv(gv) -> tuple:
 # ---------------------------------------------------------------------------
 # SOE Handler — receives measurement data from outstations (Group 30/32, 1/2)
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Receives measurement data (Group 30/32 analogue, 1/2 binary) from outstations
 class SolarSOEHandler(opendnp3.ISOEHandler):
 
@@ -104,7 +103,6 @@ class SolarSOEHandler(opendnp3.ISOEHandler):
 # ---------------------------------------------------------------------------
 # Master Application callbacks
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Master lifecycle callbacks required by opendnp3.IMasterApplication
 class SolarMasterApplication(opendnp3.IMasterApplication):
 
@@ -151,7 +149,6 @@ class SolarMasterApplication(opendnp3.IMasterApplication):
 # ---------------------------------------------------------------------------
 # Flask REST API — used by Streamlit dashboard
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Returns current values for every outstation, flattened for the dashboard
 @app.route("/registers", methods=["GET"])
 def get_registers():
@@ -164,7 +161,6 @@ def get_registers():
         return jsonify(flat)
 
 
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Returns current values for a single named outstation
 @app.route("/registers/<outstation_name>", methods=["GET"])
 def get_outstation_registers(outstation_name):
@@ -173,7 +169,6 @@ def get_outstation_registers(outstation_name):
         return jsonify(dict(data))
 
 
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Runs the Flask REST API server on port 1111
 def run_flask():
     app.run(host="0.0.0.0", port=1111)
@@ -185,7 +180,6 @@ def run_flask():
 # None]), not a subclass of an ICommandCallback interface — that interface does not
 # exist in this library version.
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Builds a plain callable that logs a DirectOperate result asynchronously
 def _make_command_callback(label):
     def _on_complete(result):
@@ -193,7 +187,6 @@ def _make_command_callback(label):
     return _on_complete
 
 
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Sends a DNP3 DirectOperate command (binary/analogue output) to an outstation
 @app.route("/command/<outstation_name>", methods=["POST"])
 def send_command(outstation_name):
@@ -245,7 +238,6 @@ def send_command(outstation_name):
 # ---------------------------------------------------------------------------
 # Build a single master connection to one outstation
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Builds one DNP3-TCP master channel + master object for one outstation
 def build_master_connection(manager, master_config_entry, outstation_entry, poll_interval_s):
     name = outstation_entry["name"]
@@ -300,7 +292,6 @@ def build_master_connection(manager, master_config_entry, outstation_entry, poll
 # ---------------------------------------------------------------------------
 # Initialise _data_points for all outstations based on config
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Pre-populates _data_points with empty entries for every configured outstation
 def init_data_points(master_config, outstation_configs):
     with _data_lock:
@@ -349,7 +340,6 @@ def init_data_points(master_config, outstation_configs):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-# Author: Van Sanh Vu, Purpose: DNP3 development
 # PURPOSE: Loads config, builds one master connection per outstation, starts the REST API
 def main():
     if not DNP3_AVAILABLE:
