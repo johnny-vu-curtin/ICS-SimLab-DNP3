@@ -151,6 +151,7 @@ PHYSICAL_VALUE_UNIT_KEYWORDS = [
 ]
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
 # FUNCTION: get_unit
 # PURPOSE:  Looks up the engineering unit for a physical value name. Returns ""
 #           for booleans/states/positions or anything not recognised.
@@ -166,6 +167,7 @@ def get_unit(physical_value_name):
 
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
 # FUNCTION: create_register_table_rows
 # PURPOSE:  Builds up the table rows for the component registers
 def create_register_table_rows(type, address, count, value, unit, response):
@@ -178,6 +180,7 @@ def create_register_table_rows(type, address, count, value, unit, response):
 
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
 # FUNCTION: create_register_table
 # PURPOSE:  Creates a dataframe for the component register table
 def create_register_table(response):

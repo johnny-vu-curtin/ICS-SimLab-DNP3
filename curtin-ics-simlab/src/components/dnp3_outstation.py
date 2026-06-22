@@ -32,6 +32,8 @@ app = Flask(__name__)
 _VALID_TABLE_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$')
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Validates a physical_value name before using it as a SQL table name
 def _is_valid_table(name: str) -> bool:
     return bool(_VALID_TABLE_RE.match(name))
 
@@ -46,6 +48,8 @@ _outstation = None
 # ---------------------------------------------------------------------------
 # DNP3 Command Handler — receives Binary Output and Analogue Output from master
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Handles incoming Binary/Analogue Output commands from the DNP3 master
 class SolarCommandHandler(opendnp3.ICommandHandler):
 
     def __init__(self, configs, db_path):
@@ -123,6 +127,8 @@ class SolarCommandHandler(opendnp3.ICommandHandler):
 # ---------------------------------------------------------------------------
 # DNP3 Outstation Application callbacks
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Outstation lifecycle callbacks required by opendnp3.IOutstationApplication
 class SolarOutstationApplication(opendnp3.IOutstationApplication):
 
     def SupportsWriteAbsoluteTime(self):
@@ -154,6 +160,8 @@ class SolarOutstationApplication(opendnp3.IOutstationApplication):
 # ---------------------------------------------------------------------------
 # SQLite polling — reads physical values and pushes them to DNP3 database
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Polls SQLite for physical values and pushes deadband-gated updates to DNP3
 def poll_sqlite(configs, db_path, outstation, poll_interval=1.0):
     ai_map      = {ai["physical_value"]: ai["index"]               for ai in configs.get("analogue_inputs", [])}
     ai_deadband = {ai["physical_value"]: float(ai.get("deadband", 0.0)) for ai in configs.get("analogue_inputs", [])}
@@ -221,12 +229,16 @@ def poll_sqlite(configs, db_path, outstation, poll_interval=1.0):
 # ---------------------------------------------------------------------------
 # Flask REST API — used by Streamlit dashboard
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Returns current values for this outstation
 @app.route("/registers", methods=["GET"])
 def get_registers():
     with _data_lock:
         return jsonify(dict(_data_points))
 
 
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Runs the Flask REST API server on port 1111
 def run_flask():
     app.run(host="0.0.0.0", port=1111)
 
@@ -234,6 +246,8 @@ def run_flask():
 # ---------------------------------------------------------------------------
 # Setup DNP3 outstation
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Builds the DNP3-TCP server channel and outstation object from config
 def build_outstation(configs):
     global _outstation
 
@@ -296,6 +310,8 @@ def build_outstation(configs):
 # ---------------------------------------------------------------------------
 # Initialise _data_points for REST API
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Pre-populates _data_points with empty entries for every configured point
 def init_data_points(configs):
     with _data_lock:
         for ai in configs.get("analogue_inputs", []):
@@ -331,6 +347,8 @@ def init_data_points(configs):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# PURPOSE: Loads config, starts the outstation, the SQLite poll loop, and the REST API
 def main():
     if not DNP3_AVAILABLE:
         logging.error("Cannot start — dnp3-python not installed")
