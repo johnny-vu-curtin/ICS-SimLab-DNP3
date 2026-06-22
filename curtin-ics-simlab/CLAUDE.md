@@ -97,6 +97,18 @@ pytest tests/integration/   # requires `docker compose up -d`; auto-skips if sta
 → Attack support requirements (Activity 2): `.claude/doc/attack-support.md`
 → Library selection + Docker constraints: `.claude/doc/library-notes.md`
 
+### Comment convention for DNP3 code
+
+- Files that are **entirely** DNP3 code (`dnp3_master.py`, `dnp3_outstation.py`,
+  `config/*/logic/solar_hil_logic.py`): a single `# Author: Van Sanh Vu, Purpose: DNP3
+  development` line near the top of the file is enough — do not repeat it above every
+  function/class.
+- Files that **mix** DNP3 with other protocols (e.g. `ui.py`, shared with Modbus): add
+  the `# Author: Van Sanh Vu, Purpose: DNP3 development` line locally, right above each
+  DNP3-specific function/block, since there's no single whole-file author tag that fits.
+- Every function and class (in both cases above) must still have its own one-line
+  `# PURPOSE: ...` comment describing what it does.
+
 ---
 
 ## Add a new scenario (no code changes)
