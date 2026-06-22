@@ -15,19 +15,30 @@ from threading import Thread
 #   temperature — ambient 25 °C base, rises ~30 °C at peak irradiance
 #   active_power — irradiance × panel efficiency × area, capped by power_curtailment,
 #                  zeroed when inverter_enable=False. Area sized so 1000 W/m² peak
-#                  irradiance × 18 % efficiency × 556 m² ≈ 100 kW.
-#   voltage_ac  — 230 V nominal + random walk (σ=1 V/step, clamped ±10 V)
+#                  irradiance × 18 % efficiency × 556 m² ≈ 100 kW. Efficiency derates
+#                  with panel_temperature above 25 °C (real crystalline-silicon
+#                  behaviour).
+#   voltage_ac  — derived from grid_voltage/√3 (230V phase from 400V LV three-phase
+#                 bus) plus a small feeder voltage-rise proportional to active_power
+#                 injection, plus small local measurement noise — not an independent
+#                 random walk, since terminal voltage is tied to the upstream grid.
 #   current_ac  — derived from power / voltage
-#   frequency   — 50 Hz ± 0.02 Hz Gaussian noise (inverter output)
+#   frequency   — locked to grid_frequency plus small measurement noise (a grid-tied
+#                 inverter's PLL synchronises to the grid; it cannot run at its own
+#                 independent frequency)
 #   inverter_status — True when active_power exceeds the inverter's minimum
-#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W)
-#   fault_alarm — True when voltage deviates > 8 V from nominal
+#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W), there is
+#                      no active fault_alarm, and the PCC is grid_connected
+#   fault_alarm — True when voltage deviates > 8 V from nominal, or frequency
+#                 deviates > 0.5 Hz from nominal (grid code over/under-frequency
+#                 trip band)
 #
 #   grid_connected — point-of-common-coupling breaker status (steady True; no
 #                    disconnect simulation in this scenario)
 #   grid_voltage   — 400 V LV three-phase bus at PCC, ± Gaussian noise σ=2 V
 #   grid_frequency — 50 Hz grid reference, ± Gaussian noise σ=0.01 Hz (tighter than
-#                    inverter-side frequency since grid is the stiffer reference)
+#                    inverter-side frequency since grid is the stiffer reference) —
+#                    inverter frequency above is locked to this value
 #
 # Noise is intentional: flat/deterministic values make anomalies trivially detectable,
 # defeating IDS evaluation (attack #9 requirement).
@@ -44,6 +55,13 @@ INVERTER_ONLINE_THRESHOLD_W = 20.0   # real string inverters need a minimum DC b
                                       # power before grid-connecting (anti-islanding/
                                       # startup check) — avoids flickering "online" at
                                       # dawn/dusk on every tiny noise fluctuation
+TEMP_COEFF_PCT_PER_C = 0.4    # panel efficiency loss per °C above 25 °C reference
+                               # (typical for crystalline-silicon panels)
+FREQ_FAULT_THRESHOLD_HZ = 0.5    # grid code over/under-frequency trip band
+FEEDER_VOLTAGE_RISE_V_AT_RATED_POWER = 5.0   # max local voltage rise at 100 kW
+                                               # export (typical LV feeder voltage-
+                                               # rise effect from PV injection)
+RATED_POWER_W = 100000.0   # per-inverter rated capacity, used to scale voltage rise
 
 
 # PURPOSE: Safely coerces a value to float, falling back to a default on failure
@@ -106,31 +124,46 @@ def _irradiance_sim(pv):
 # PURPOSE: Simulates inverter electrical output (power/voltage/current/frequency/fault),
 #          sized for ~100 kW peak per inverter
 def _electrical_sim(pv):
-    voltage = NOMINAL_VOLTAGE
     while True:
         irradiance      = pv["solar_irradiance"]
+        panel_temp      = pv["panel_temperature"]
         inverter_enable = bool(int(_safe_float(pv.get("inverter_enable", 1), 1)))
         curtailment_pct = _safe_float(pv.get("power_curtailment", 100.0), 100.0)
         curtailment_pct = max(0.0, min(100.0, curtailment_pct))
 
-        # Active power from solar model (sized for ~100 kW peak per inverter)
-        gross_power = irradiance * PANEL_EFFICIENCY * PANEL_AREA_M2  # Watts
+        # Active power from solar model, derated for panel temperature above 25 °C
+        # (sized for ~100 kW peak per inverter)
+        temp_derate = max(0.0, 1.0 - TEMP_COEFF_PCT_PER_C / 100.0 * max(0.0, panel_temp - 25.0))
+        gross_power = irradiance * PANEL_EFFICIENCY * temp_derate * PANEL_AREA_M2  # Watts
         curtailed   = gross_power * (curtailment_pct / 100.0)
         active_power = curtailed if inverter_enable else 0.0
 
-        # Voltage: random walk, clamped ±10 V from nominal
-        voltage += random.gauss(0, 1.0)
-        voltage  = max(NOMINAL_VOLTAGE - 10.0, min(NOMINAL_VOLTAGE + 10.0, voltage))
+        # Voltage: derived from the grid LV bus (400V three-phase / sqrt(3) = 230V
+        # phase), plus a small feeder voltage-rise from this inverter's own power
+        # injection, plus small local measurement noise — not an independent walk,
+        # since terminal voltage is tied to the upstream grid it's connected to.
+        grid_voltage = _safe_float(pv.get("grid_voltage", NOMINAL_GRID_VOLTAGE), NOMINAL_GRID_VOLTAGE)
+        base_voltage = grid_voltage / math.sqrt(3)
+        voltage_rise = (active_power / RATED_POWER_W) * FEEDER_VOLTAGE_RISE_V_AT_RATED_POWER
+        voltage = base_voltage + voltage_rise + random.gauss(0, 0.5)
+        voltage = max(NOMINAL_VOLTAGE - 10.0, min(NOMINAL_VOLTAGE + 10.0, voltage))
 
         # Current derived from power
         current = (active_power / voltage) if voltage > 0 else 0.0
 
-        # Frequency: Gaussian noise around 50 Hz
-        frequency = NOMINAL_FREQ + random.gauss(0, 0.02)
+        # Frequency: locked to the grid reference plus small measurement noise — a
+        # grid-tied inverter's PLL synchronises to the grid, it cannot drift on its own.
+        grid_frequency = _safe_float(pv.get("grid_frequency", NOMINAL_GRID_FREQ), NOMINAL_GRID_FREQ)
+        frequency = grid_frequency + random.gauss(0, 0.005)
 
-        # Status and fault
-        inverter_status = active_power > INVERTER_ONLINE_THRESHOLD_W
-        fault_alarm     = abs(voltage - NOMINAL_VOLTAGE) > 8.0
+        # Fault: voltage OR frequency outside the grid code trip band
+        fault_alarm = (abs(voltage - NOMINAL_VOLTAGE) > 8.0) or \
+                      (abs(frequency - NOMINAL_FREQ) > FREQ_FAULT_THRESHOLD_HZ)
+
+        # Online status requires enough power, no active fault, AND the PCC being
+        # grid-connected — this plant cannot energise islanded (no battery storage).
+        grid_connected = bool(pv.get("grid_connected", True))
+        inverter_status = (active_power > INVERTER_ONLINE_THRESHOLD_W) and not fault_alarm and grid_connected
 
         pv["active_power"]    = round(active_power, 2)
         pv["voltage_ac"]      = round(voltage, 3)
