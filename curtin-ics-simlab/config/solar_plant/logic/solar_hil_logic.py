@@ -9,13 +9,15 @@ from threading import Thread
 #
 # Physical model:
 #   irradiance  — sinusoidal 24 h cycle (peak at solar noon) + Gaussian noise σ=5 W/m²
+#                 during daylight (6h–18h); exactly 0 at night, no noise
 #   temperature — ambient 25 °C base, rises ~30 °C at peak irradiance
 #   active_power — irradiance × panel efficiency × area, capped by power_curtailment,
 #                  zeroed when inverter_enable=False
 #   voltage_ac  — 230 V nominal + random walk (σ=1 V/step, clamped ±10 V)
 #   current_ac  — derived from power / voltage
 #   frequency   — 50 Hz ± 0.02 Hz Gaussian noise
-#   inverter_status — True when active_power > 0
+#   inverter_status — True when active_power exceeds the inverter's minimum
+#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W)
 #   fault_alarm — True when voltage deviates > 8 V from nominal
 #
 # Noise is intentional: flat/deterministic values make anomalies trivially detectable,
@@ -27,6 +29,10 @@ PANEL_AREA_M2    = 50.0   # total panel area per inverter
 NOMINAL_VOLTAGE  = 230.0
 NOMINAL_FREQ     = 50.0
 CYCLE_SECONDS    = 60     # 1 full day cycle in 60 seconds (demo visibility)
+INVERTER_ONLINE_THRESHOLD_W = 20.0   # real string inverters need a minimum DC bus
+                                      # power before grid-connecting (anti-islanding/
+                                      # startup check) — avoids flickering "online" at
+                                      # dawn/dusk on every tiny noise fluctuation
 
 
 # PURPOSE: Safely coerces a value to float, falling back to a default on failure
@@ -66,12 +72,14 @@ def _irradiance_sim(pv):
 
         # Bell curve centred at noon (hour=12), width σ≈2 h → realistic daylight envelope
         raw = 1000.0 * math.exp(-0.5 * ((hour - 12.0) / 2.5) ** 2)
-        # Night: force zero when < 6 h or > 18 h
         if hour < 6.0 or hour > 18.0:
-            raw = 0.0
-
-        noise = random.gauss(0, 5.0)  # σ = 5 W/m²
-        irradiance = max(0.0, raw + noise)
+            # Night: no photovoltaic effect without light — exactly 0, no noise.
+            # (A real irradiance sensor reads a flat near-zero floor at night;
+            # applying daytime noise here would fabricate phantom power after dark.)
+            irradiance = 0.0
+        else:
+            noise = random.gauss(0, 5.0)  # σ = 5 W/m²
+            irradiance = max(0.0, raw + noise)
         pv["solar_irradiance"] = round(irradiance, 2)
 
         # Temperature: ambient 25 °C + proportional rise from irradiance
@@ -105,7 +113,7 @@ def _electrical_sim(pv):
         frequency = NOMINAL_FREQ + random.gauss(0, 0.02)
 
         # Status and fault
-        inverter_status = active_power > 0.0
+        inverter_status = active_power > INVERTER_ONLINE_THRESHOLD_W
         fault_alarm     = abs(voltage - NOMINAL_VOLTAGE) > 8.0
 
         pv["active_power"]    = round(active_power, 2)
