@@ -12,19 +12,24 @@ from threading import Thread
 #                 during daylight (6h–18h); exactly 0 at night, no noise
 #   temperature — ambient 25 °C base, rises ~30 °C at peak irradiance
 #   active_power — irradiance × panel efficiency × area, capped by power_curtailment,
-#                  zeroed when inverter_enable=False
+#                  zeroed when inverter_enable=False. Efficiency derates with
+#                  panel_temperature above 25 °C (real crystalline-silicon behaviour).
 #   voltage_ac  — 230 V nominal + random walk (σ=1 V/step, clamped ±10 V)
 #   current_ac  — derived from power / voltage
 #   frequency   — 50 Hz ± 0.02 Hz Gaussian noise
 #   inverter_status — True when active_power exceeds the inverter's minimum
-#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W)
-#   fault_alarm — True when voltage deviates > 8 V from nominal
+#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W) AND
+#                      there is no active fault_alarm (a faulted inverter cannot
+#                      also be reporting normal online operation)
+#   fault_alarm — True when voltage deviates > 8 V from nominal, or frequency
+#                 deviates > 0.5 Hz from nominal (grid code over/under-frequency
+#                 trip band)
 #
 # Noise is intentional: flat/deterministic values make anomalies trivially detectable,
 # defeating IDS evaluation (attack #9 requirement).
 
 
-PANEL_EFFICIENCY = 0.18   # 18 % monocrystalline
+PANEL_EFFICIENCY = 0.18   # 18 % monocrystalline, at 25 °C reference temperature
 PANEL_AREA_M2    = 50.0   # total panel area per inverter
 NOMINAL_VOLTAGE  = 230.0
 NOMINAL_FREQ     = 50.0
@@ -33,6 +38,9 @@ INVERTER_ONLINE_THRESHOLD_W = 20.0   # real string inverters need a minimum DC b
                                       # power before grid-connecting (anti-islanding/
                                       # startup check) — avoids flickering "online" at
                                       # dawn/dusk on every tiny noise fluctuation
+TEMP_COEFF_PCT_PER_C = 0.4   # panel efficiency loss per °C above 25 °C reference
+                              # (typical for crystalline-silicon panels)
+FREQ_FAULT_THRESHOLD_HZ = 0.5   # grid code over/under-frequency trip band
 
 
 # PURPOSE: Safely coerces a value to float, falling back to a default on failure
@@ -93,12 +101,14 @@ def _electrical_sim(pv):
     voltage = NOMINAL_VOLTAGE
     while True:
         irradiance      = pv["solar_irradiance"]
+        panel_temp      = pv["panel_temperature"]
         inverter_enable = bool(int(_safe_float(pv.get("inverter_enable", 1), 1)))
         curtailment_pct = _safe_float(pv.get("power_curtailment", 100.0), 100.0)
         curtailment_pct = max(0.0, min(100.0, curtailment_pct))
 
-        # Active power from solar model
-        gross_power = irradiance * PANEL_EFFICIENCY * PANEL_AREA_M2  # Watts
+        # Active power from solar model, derated for panel temperature above 25 °C
+        temp_derate = max(0.0, 1.0 - TEMP_COEFF_PCT_PER_C / 100.0 * max(0.0, panel_temp - 25.0))
+        gross_power = irradiance * PANEL_EFFICIENCY * temp_derate * PANEL_AREA_M2  # Watts
         curtailed   = gross_power * (curtailment_pct / 100.0)
         active_power = curtailed if inverter_enable else 0.0
 
@@ -112,9 +122,13 @@ def _electrical_sim(pv):
         # Frequency: Gaussian noise around 50 Hz
         frequency = NOMINAL_FREQ + random.gauss(0, 0.02)
 
-        # Status and fault
-        inverter_status = active_power > INVERTER_ONLINE_THRESHOLD_W
-        fault_alarm     = abs(voltage - NOMINAL_VOLTAGE) > 8.0
+        # Fault: voltage OR frequency outside the grid code trip band
+        fault_alarm = (abs(voltage - NOMINAL_VOLTAGE) > 8.0) or \
+                      (abs(frequency - NOMINAL_FREQ) > FREQ_FAULT_THRESHOLD_HZ)
+
+        # Online status requires both enough power AND no active fault — a
+        # faulted inverter must not also report normal online operation.
+        inverter_status = (active_power > INVERTER_ONLINE_THRESHOLD_W) and not fault_alarm
 
         pv["active_power"]    = round(active_power, 2)
         pv["voltage_ac"]      = round(voltage, 3)
