@@ -419,7 +419,10 @@ def main():
                 y_title = f"Value ({unit})" if unit else "Value"
                 chart = alt.Chart(df_grouped.reset_index(), height=325).mark_line().encode(
                     x=alt.X("timestamp:T", title="Time", axis=alt.Axis(format="%M:%S")),
-                    y=alt.Y("value:Q", title=y_title),
+                    # zero=False lets the axis zoom to the data's actual range instead of
+                    # always including 0 — otherwise near-constant signals (e.g. frequency
+                    # at 50Hz ±0.02) render as a flat line on a 0..50 scale.
+                    y=alt.Y("value:Q", title=y_title, scale=alt.Scale(zero=False)),
                 )
 
                 graphs[physical_value].altair_chart(chart)
