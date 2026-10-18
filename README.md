@@ -12,6 +12,30 @@ funded by **Curtin University**.
 ---
 
 
+## DNP3 Extension
+
+**The DNP3 protocol support and the solar plant scenarios in this repository were developed by Van Sanh Vu** (MPhil, School of EECMS, Curtin University) as part of research on intrusion detection for energy-sector ICS. The base ICS-SimLab framework (Modbus TCP/RTU, HIL, sensors, actuators, PLCs, HMIs and the dashboard) is the work of Jaxson Brown et al. — see [Citation](#citiation) below.
+
+Contributions by Van Sanh Vu:
+
+- **DNP3-TCP components** (port 20000, built on [`dnp3-python`](https://pypi.org/project/dnp3-python/)):
+  - `dnp3_master` — SCADA master: Class 0123 integrity polls, unsolicited responses, DirectOperate commands, REST API (`GET /registers`, `POST /command/<outstation>`)
+  - `dnp3_outstation` — solar inverter outstation mapping HIL physical values to DNP3 analogue/binary inputs and outputs
+- **Solar plant scenarios**:
+  - `config/solar_plant` — SCADA master + 2 inverter outstations
+  - `config/solar_plant_500kw` — 500 kW plant with 5 × 100 kW grid-tied inverters and point-of-common-coupling (grid voltage/frequency) measurements
+- **Physically correlated HIL logic** for the solar scenarios (irradiance, temperature derating, grid-locked voltage/frequency, fault and online status)
+- **Dashboard support** for DNP3 components, setup/Docker integration, and unit and integration tests (`curtin-ics-simlab/tests/`)
+
+Run a DNP3 scenario from `curtin-ics-simlab/`:
+
+```bash
+sudo ./start.sh config/solar_plant        # or config/solar_plant_500kw
+```
+
+---
+
+
 ## Citiation
 
 This repository contains the implementation of the following paper:
