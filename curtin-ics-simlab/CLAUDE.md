@@ -66,7 +66,7 @@ It is the single shared physical state bus — all components read/write through
 |-------------------|-------------------|-------------|-----------------------|
 | `dnp3_master`     | SCADA controller  | Master      | Implemented           |
 | `dnp3_outstation` | Solar inverter    | Outstation  | Implemented           |
-| `attacker`        | Attack simulator  | Rogue master| Planned (Activity 2)  |
+| `attacker`        | Attack simulator  | Rogue master| Implemented (Activity 2 — command injection) |
 
 Run it like any other scenario:
 
@@ -75,6 +75,31 @@ python3 main.py config/solar_plant
 docker compose build
 docker compose up
 ```
+
+### Activity 2 — attacker component + `config/solar_plant_attack`
+
+`attacker` is a first-class component type (built by `src/setup.py` like any other) that
+runs as a rogue DNP3 master. The `config/solar_plant_attack/` scenario clones
+`config/solar_plant` and adds a second network (`vlan_it`, 192.168.1.0/24) plus a
+dual-homed `attacker` (IT 192.168.1.100 + OT 192.168.0.200) for IT→OT lateral movement.
+
+```bash
+python3 main.py config/solar_plant_attack
+docker compose build && docker compose up -d
+```
+
+- Attack type/intensity are config-driven (`attack.type`, `attack.intensity`,
+  `attack.start_delay_s` in `configuration.json` → env vars `ATTACK_TYPE` etc.). Switching
+  attacks needs no code change. `type: "none"` makes the rogue master idle.
+- Attack logic lives in `config/solar_plant_attack/logic/attack_logic.py`, entry point
+  `run(targets, master_address, config)`, dispatched by `ATTACKS[type]`.
+- **Implemented attack**: `command_injection` (taxonomy #4) — unauthenticated FC 0x03
+  DirectOperate forcing `inverter_enable=0` + `power_curtailment=100`. Verified live: both
+  land in SQLite, attacker stays up indefinitely.
+- **Dataset methodology**: capture benign and malicious in **separate phases**. For a
+  clean attack capture, `docker compose stop scada` first so the rogue master is the only
+  master on outstation address 1 (two masters on the same address contend for the single
+  outstation session and flap — realistic spoofing contention, but it muddies labels).
 
 ### REST API additions (port 1111)
 
@@ -145,10 +170,31 @@ Schema reference: `.claude/doc/solar-plant-config.md`
   `PRAGMA busy_timeout = 2000` in the outstation's poll loop
   (`src/components/dnp3_outstation.py`). Sufficient for 2 outstations @ 5 s poll
   interval — revisit if polling frequency increases significantly.
-- **Network topology**: `config/solar_plant` currently runs on a single `vlan_ot`
-  network (192.168.0.0/24) — scada master, both outstations, HIL, and UI.
-  The two-network `vlan_it`/`vlan_ot` split for `attacker` + IT→OT lateral movement
-  is planned for Activity 2, not yet implemented.
+- **Network topology**: `config/solar_plant` runs on a single `vlan_ot` network
+  (192.168.0.0/24) — scada master, both outstations, HIL, and UI. The two-network
+  `vlan_it`/`vlan_ot` split for `attacker` + IT→OT lateral movement is implemented in
+  `config/solar_plant_attack` (Activity 2). `build_attacker_yaml` accepts either a single
+  `network` dict or a `networks` list (dual-homed); `build_network_yaml` already loops
+  over `ip_networks`, so adding `vlan_it` needs no code change.
+- **dnp3-python command path crashes on completion (0.3.0b2)**: issuing a DirectOperate
+  reliably delivers the frame AND drives the outstation, but the master process then dies
+  when the command task completes — a native asio-thread GIL fault (`PyThreadState_Get ...
+  thread state NULL`) that happens with Python *or* C++ completion callbacks alike. The
+  legitimate master (`POST /command`) dodges it only because commands are rare. The
+  attacker works around it in `attack_logic.py` by forking **one child process per single
+  command** (`_inject_single`): the outstation executes FC 0x03 on frame arrival — before
+  the master processes the response — so every injection lands before its child crashes,
+  and the long-running parent loop survives. Do not "simplify" this back to a persistent
+  master issuing multiple commands; it will crash after the first command every cycle.
+- **Phase 1 command-handler bugs fixed in Activity 2** (`src/components/dnp3_outstation.py`
+  — only ever exercised once a control command is actually sent): (1) `ICommandHandler`'s
+  pure virtual is `Start()`, not `Begin()` — the old name aborted the outstation on the
+  first command; (2) command handler + outstation application must be held in a
+  module-level `_keep_alive` list — pybind11 keeps only weak refs, so they were GC'd and
+  the next virtual call aborted; (3) `opendnp3.ControlCode` has no bare `CLOSE` in this
+  binding (use `CLOSE_PULSE_ON`/`PULSE_ON`); (4) `Operate()` now wraps its body in
+  try/except so a malformed/malicious command returns `DOWNSTREAM_FAIL` instead of
+  aborting the container.
 - **Port 20000**: IANA-registered DNP3-TCP default. Do not change without updating all configs.
 
 ---
