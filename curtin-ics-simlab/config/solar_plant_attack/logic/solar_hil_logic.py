@@ -1,0 +1,140 @@
+import time
+import math
+import random
+import numpy as np
+from threading import Thread
+
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# Solar plant HIL logic.
+#
+# Physical model:
+#   irradiance  — sinusoidal 24 h cycle (peak at solar noon) + Gaussian noise σ=5 W/m²
+#                 during daylight (6h–18h); exactly 0 at night, no noise
+#   temperature — ambient 25 °C base, rises ~30 °C at peak irradiance
+#   active_power — irradiance × panel efficiency × area, capped by power_curtailment,
+#                  zeroed when inverter_enable=False. Efficiency derates with
+#                  panel_temperature above 25 °C (real crystalline-silicon behaviour).
+#   voltage_ac  — 230 V nominal + random walk (σ=1 V/step, clamped ±10 V)
+#   current_ac  — derived from power / voltage
+#   frequency   — 50 Hz ± 0.02 Hz Gaussian noise
+#   inverter_status — True when active_power exceeds the inverter's minimum
+#                      grid-connect threshold (INVERTER_ONLINE_THRESHOLD_W) AND
+#                      there is no active fault_alarm (a faulted inverter cannot
+#                      also be reporting normal online operation)
+#   fault_alarm — True when voltage deviates > 8 V from nominal, or frequency
+#                 deviates > 0.5 Hz from nominal (grid code over/under-frequency
+#                 trip band)
+#
+# Noise is intentional: flat/deterministic values make anomalies trivially detectable,
+# defeating IDS evaluation (attack #9 requirement).
+
+
+PANEL_EFFICIENCY = 0.18   # 18 % monocrystalline, at 25 °C reference temperature
+PANEL_AREA_M2    = 50.0   # total panel area per inverter
+NOMINAL_VOLTAGE  = 230.0
+NOMINAL_FREQ     = 50.0
+CYCLE_SECONDS    = 60     # 1 full day cycle in 60 seconds (demo visibility)
+INVERTER_ONLINE_THRESHOLD_W = 20.0   # real string inverters need a minimum DC bus
+                                      # power before grid-connecting (anti-islanding/
+                                      # startup check) — avoids flickering "online" at
+                                      # dawn/dusk on every tiny noise fluctuation
+TEMP_COEFF_PCT_PER_C = 0.4   # panel efficiency loss per °C above 25 °C reference
+                              # (typical for crystalline-silicon panels)
+FREQ_FAULT_THRESHOLD_HZ = 0.5   # grid code over/under-frequency trip band
+
+
+# PURPOSE: Safely coerces a value to float, falling back to a default on failure
+def _safe_float(val, default):
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+# PURPOSE: Initialises HIL physical values and starts the irradiance/electrical sim threads
+def logic(physical_values):
+    physical_values["voltage_ac"]        = NOMINAL_VOLTAGE
+    physical_values["current_ac"]        = 0.0 # ample
+    physical_values["active_power"]      = 0.0
+    physical_values["frequency"]         = NOMINAL_FREQ
+    physical_values["solar_irradiance"]  = 0.0
+    physical_values["panel_temperature"] = 25.0
+    physical_values["inverter_status"]   = False
+    physical_values["fault_alarm"]       = False
+    # hil.py pre-initialises all physical_values to "" before calling logic(),
+    # so setdefault does nothing. Explicitly set safe defaults for inputs.
+    physical_values["inverter_enable"]   = 1
+    physical_values["power_curtailment"] = 100.0
+
+    Thread(target=_irradiance_sim,  args=(physical_values,), daemon=True).start()
+    Thread(target=_electrical_sim,  args=(physical_values,), daemon=True).start()
+
+
+# PURPOSE: Simulates a 24h solar irradiance/temperature cycle in a background thread
+def _irradiance_sim(pv):
+    # Map cycle position (0..CYCLE_SECONDS) → hour of day (0..24) regardless of cycle length.
+    # Peak irradiance at hour=12, zero outside 6 h – 18 h window.
+    while True:
+        t = time.time()
+        hour = (t % CYCLE_SECONDS) / CYCLE_SECONDS * 24.0
+
+        # Bell curve centred at noon (hour=12), width σ≈2 h → realistic daylight envelope
+        raw = 1000.0 * math.exp(-0.5 * ((hour - 12.0) / 2.5) ** 2)
+        if hour < 6.0 or hour > 18.0:
+            # Night: no photovoltaic effect without light — exactly 0, no noise.
+            # (A real irradiance sensor reads a flat near-zero floor at night;
+            # applying daytime noise here would fabricate phantom power after dark.)
+            irradiance = 0.0
+        else:
+            noise = random.gauss(0, 5.0)  # σ = 5 W/m²
+            irradiance = max(0.0, raw + noise)
+        pv["solar_irradiance"] = round(irradiance, 2)
+
+        # Temperature: ambient 25 °C + proportional rise from irradiance
+        pv["panel_temperature"] = round(25.0 + (irradiance / 1000.0) * 30.0 + random.gauss(0, 0.3), 2)
+
+        time.sleep(1.0)
+
+
+# PURPOSE: Simulates inverter electrical output (power/voltage/current/frequency/fault)
+def _electrical_sim(pv):
+    voltage = NOMINAL_VOLTAGE
+    while True:
+        irradiance      = pv["solar_irradiance"]
+        panel_temp      = pv["panel_temperature"]
+        inverter_enable = bool(int(_safe_float(pv.get("inverter_enable", 1), 1)))
+        curtailment_pct = _safe_float(pv.get("power_curtailment", 100.0), 100.0)
+        curtailment_pct = max(0.0, min(100.0, curtailment_pct))
+
+        # Active power from solar model, derated for panel temperature above 25 °C
+        temp_derate = max(0.0, 1.0 - TEMP_COEFF_PCT_PER_C / 100.0 * max(0.0, panel_temp - 25.0))
+        gross_power = irradiance * PANEL_EFFICIENCY * temp_derate * PANEL_AREA_M2  # Watts
+        curtailed   = gross_power * (curtailment_pct / 100.0)
+        active_power = curtailed if inverter_enable else 0.0
+
+        # Voltage: random walk, clamped ±10 V from nominal
+        voltage += random.gauss(0, 1.0)
+        voltage  = max(NOMINAL_VOLTAGE - 10.0, min(NOMINAL_VOLTAGE + 10.0, voltage))
+
+        # Current derived from power
+        current = (active_power / voltage) if voltage > 0 else 0.0
+
+        # Frequency: Gaussian noise around 50 Hz
+        frequency = NOMINAL_FREQ + random.gauss(0, 0.02)
+
+        # Fault: voltage OR frequency outside the grid code trip band
+        fault_alarm = (abs(voltage - NOMINAL_VOLTAGE) > 8.0) or \
+                      (abs(frequency - NOMINAL_FREQ) > FREQ_FAULT_THRESHOLD_HZ)
+
+        # Online status requires both enough power AND no active fault — a
+        # faulted inverter must not also report normal online operation.
+        inverter_status = (active_power > INVERTER_ONLINE_THRESHOLD_W) and not fault_alarm
+
+        pv["active_power"]    = round(active_power, 2)
+        pv["voltage_ac"]      = round(voltage, 3)
+        pv["current_ac"]      = round(current, 4)
+        pv["frequency"]       = round(frequency, 4)
+        pv["inverter_status"] = inverter_status
+        pv["fault_alarm"]     = fault_alarm
+
+        time.sleep(1.0)

@@ -44,6 +44,13 @@ _data_lock = threading.Lock()
 # Outstation reference for applying updates
 _outstation = None
 
+# Strong references to objects whose virtual methods C++ dispatches into. pybind11 keeps
+# only weak refs to the command handler and outstation application, so without this they
+# are garbage-collected after setup returns and the next virtual call ("ICommandHandler::
+# Start") aborts the process. Only surfaced in Activity 2 — the first path to send a
+# control command, which is the first thing to invoke ICommandHandler at all.
+_keep_alive = []
+
 
 # ---------------------------------------------------------------------------
 # DNP3 Command Handler — receives Binary Output and Analogue Output from master
@@ -58,7 +65,11 @@ class SolarCommandHandler(opendnp3.ICommandHandler):
         self._bo_map = {bo["index"]: bo["physical_value"] for bo in configs.get("binary_outputs", [])}
         self._ao_map = {ao["index"]: ao["physical_value"] for ao in configs.get("analogue_outputs", [])}
 
-    def Begin(self):
+    # ICommandHandler's pure virtuals are Start()/End() — the previous Begin() left
+    # Start() unoverridden, which aborted the outstation ("pure virtual call") the first
+    # time a control command was actually processed. Only surfaced in Activity 2, which
+    # is the first path to exercise FC 0x03 DirectOperate end-to-end.
+    def Start(self):
         pass
 
     def End(self):
@@ -68,25 +79,38 @@ class SolarCommandHandler(opendnp3.ICommandHandler):
         return opendnp3.CommandStatus.SUCCESS
 
     def Operate(self, command, index, op_type):
-        if isinstance(command, opendnp3.ControlRelayOutputBlock):
-            return self._handle_binary_output(index, command)
-        elif isinstance(command, opendnp3.AnalogOutputInt16):
-            return self._handle_analogue_output(index, float(command.value))
-        elif isinstance(command, opendnp3.AnalogOutputInt32):
-            return self._handle_analogue_output(index, float(command.value))
-        elif isinstance(command, opendnp3.AnalogOutputFloat32):
-            return self._handle_analogue_output(index, float(command.value))
-        elif isinstance(command, opendnp3.AnalogOutputDouble64):
-            return self._handle_analogue_output(index, float(command.value))
-        return opendnp3.CommandStatus.NOT_SUPPORTED
+        # Any exception raised here propagates through the C++ virtual call as
+        # pybind11::error_already_set and aborts the whole outstation process. Catch
+        # everything so a malformed/malicious command (which Activity 2 injects on
+        # purpose) degrades to a DOWNSTREAM_FAIL status instead of killing the container.
+        try:
+            if isinstance(command, opendnp3.ControlRelayOutputBlock):
+                return self._handle_binary_output(index, command)
+            elif isinstance(command, opendnp3.AnalogOutputInt16):
+                return self._handle_analogue_output(index, float(command.value))
+            elif isinstance(command, opendnp3.AnalogOutputInt32):
+                return self._handle_analogue_output(index, float(command.value))
+            elif isinstance(command, opendnp3.AnalogOutputFloat32):
+                return self._handle_analogue_output(index, float(command.value))
+            elif isinstance(command, opendnp3.AnalogOutputDouble64):
+                return self._handle_analogue_output(index, float(command.value))
+            return opendnp3.CommandStatus.NOT_SUPPORTED
+        except Exception as e:
+            logging.error(f"Operate failed for index {index}: {e}")
+            return opendnp3.CommandStatus.DOWNSTREAM_FAIL
 
     def _handle_binary_output(self, index, command):
         physical_value = self._bo_map.get(index)
         if physical_value is None:
             return opendnp3.CommandStatus.NOT_SUPPORTED
 
+        # "On" control codes → 1. ControlCode has no bare CLOSE in dnp3-python 0.3.0b2;
+        # the close/energise variants are CLOSE_PULSE_ON / PULSE_ON (plus LATCH_ON).
         code = command.functionCode
-        value = 1 if code in (opendnp3.ControlCode.LATCH_ON, opendnp3.ControlCode.CLOSE) else 0
+        on_codes = (opendnp3.ControlCode.LATCH_ON,
+                    opendnp3.ControlCode.CLOSE_PULSE_ON,
+                    opendnp3.ControlCode.PULSE_ON)
+        value = 1 if code in on_codes else 0
 
         self._write_to_db(physical_value, value)
         with _data_lock:
@@ -285,6 +309,8 @@ def build_outstation(configs):
     db_path = "/src/physical_interactions.db"
     command_handler = SolarCommandHandler(configs, db_path)
     application = SolarOutstationApplication()
+    # Pin strong refs — C++ dispatches virtual calls into these (see _keep_alive note).
+    _keep_alive.extend([command_handler, application])
 
     _outstation = channel.AddOutstation(
         "outstation",

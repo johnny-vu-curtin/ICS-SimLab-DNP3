@@ -75,10 +75,11 @@ def parse_json_to_yaml(directory, yaml_filename):
         hils = build_hil_yaml(json_content)
         dnp3_outstations = build_dnp3_outstation_yaml(json_content)
         dnp3_masters = build_dnp3_master_yaml(json_content)
+        attackers = build_attacker_yaml(json_content)
 
         # create the YAML file
         parsed_json_content = {
-            "services": ui | hmis | plcs | sensors | actuators | hils | dnp3_outstations | dnp3_masters,
+            "services": ui | hmis | plcs | sensors | actuators | hils | dnp3_outstations | dnp3_masters | attackers,
             "networks": networks,
         }
 
@@ -479,6 +480,46 @@ def build_dnp3_master_yaml(json_content):
     return json_masters
 
 
+# FUNCTION: build_attacker_yaml
+# PURPOSE:  Builds the compose service section for attacker components (Activity 2
+#           dataset generation). Supports a single "network" dict or a "networks" list
+#           so an attacker can be dual-homed on vlan_it + vlan_ot for IT->OT scenarios.
+def build_attacker_yaml(json_content):
+    root_path = Path(__file__).resolve().parent.parent
+    json_attackers = {}
+    if "attackers" not in json_content: return {}
+
+    for attacker in json_content["attackers"]:
+        container_name = attacker["name"]
+        build = f"{root_path}/simulation/containers/{container_name}"
+
+        # Accept either a single network dict or a list of networks (dual-homed).
+        net_entries = attacker.get("networks")
+        if net_entries is None:
+            net_entries = [attacker["network"]]
+        networks = {}
+        for net in net_entries:
+            networks[net["docker_network"]] = {"ipv4_address": net["ip"]}
+
+        # Attack selection is passed via environment so logic need not change per attack.
+        attack = attacker.get("attack", {})
+        environment = {
+            "ATTACK_TYPE": str(attack.get("type", "none")),
+            "ATTACK_INTENSITY": str(attack.get("intensity", "low")),
+            "ATTACK_START_DELAY_S": str(attack.get("start_delay_s", 0)),
+        }
+
+        json_attackers[container_name] = {
+            "build": build,
+            "container_name": container_name,
+            "privileged": True,
+            "command": ["python3", "-u", "attacker.py"],
+            "environment": environment,
+            "networks": networks,
+        }
+    return json_attackers
+
+
 # FUNCTION: build_ui_directory
 # PURPOSE:  Creates the ui directory
 def build_ui_directory(json_content):
@@ -709,6 +750,52 @@ def build_dnp3_master_directory(json_content, directory):
         )
 
 
+# FUNCTION: build_attacker_directory
+# PURPOSE:  Creates each attacker container dir: copies the attacker runtime, the shared
+#           DNP3 Dockerfile (same ubuntu:22.04 + dnp3-python base), the scenario's attack
+#           logic module (if any), and writes config.json with targets + attack params.
+def build_attacker_directory(json_content, directory):
+    root_path = Path(__file__).resolve().parent.parent
+    if "attackers" not in json_content: return
+
+    for attacker in json_content["attackers"]:
+        name = attacker["name"]
+        Path(f"{root_path}/simulation/containers/{name}").mkdir()
+        Path(f"{root_path}/simulation/containers/{name}/src").mkdir()
+
+        # Reuse the DNP3 Dockerfile — attacker acts as a rogue DNP3 master and needs the
+        # same dnp3-python base image, so there is no separate attacker Dockerfile.
+        shutil.copy(
+            f"{root_path}/src/docker-files/dnp3/Dockerfile",
+            f"{root_path}/simulation/containers/{name}"
+        )
+
+        json_config = {
+            "logic":          attacker.get("logic", ""),
+            "targets":        attacker.get("targets", []),
+            "master_address": attacker.get("master_address", 1),
+            "attack":         attacker.get("attack", {}),
+        }
+        with open(f"{root_path}/simulation/containers/{name}/src/config.json", "w") as f:
+            f.write(json.dumps(json_config, indent=4))
+
+        shutil.copy(
+            f"{root_path}/src/components/attacker.py",
+            f"{root_path}/simulation/containers/{name}/src"
+        )
+
+        # Copy the scenario's attack logic module if one is specified.
+        logic_file = attacker.get("logic", "")
+        if logic_file:
+            logic_src = f"{directory}/logic/{logic_file}"
+            if Path(logic_src).exists():
+                Path(f"{root_path}/simulation/containers/{name}/src/logic").mkdir()
+                shutil.copy(
+                    logic_src,
+                    f"{root_path}/simulation/containers/{name}/src/logic"
+                )
+
+
 # FUNCTION: create_containers
 # PURPOSE:  Builds the directory containers for the main components of the simulation. These
 #           include the PLCs, HMIs, and the sensors and actuators.
@@ -732,6 +819,7 @@ def create_containers(json_content, directory):
     build_hil_directory(json_content, directory)
     build_dnp3_outstation_directory(json_content, directory)
     build_dnp3_master_directory(json_content, directory)
+    build_attacker_directory(json_content, directory)
     
     
 # FUNCTION: create_communications
