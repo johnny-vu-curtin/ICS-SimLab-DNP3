@@ -238,6 +238,11 @@
             {
                 "coil":
                 [
+                    {
+                        "address": 2,
+                        "count": 1,
+                        "physical_value": "transfer_switch_state"
+                    }
                 ],
                 "discrete_input":
                 [
