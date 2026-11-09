@@ -8,8 +8,10 @@
 # for the Streamlit dashboard.
 
 import json
+import sys
 import time
 import logging
+import subprocess
 import threading
 from flask import Flask, jsonify, request
 
@@ -29,8 +31,22 @@ app = Flask(__name__)
 _data_points = {}
 _data_lock = threading.Lock()
 
-# Lookup: outstation_name → master object (for command dispatch)
+# Lookup: outstation_name → {ip, port, outstation_address, master_address}, used to
+# spawn an isolated one-shot command worker process (see send_command / _cli_send_command
+# below) — commands no longer go through the persistent polling master's own
+# DirectOperate() call.
+_outstation_meta = {}
+
+# Lookup: outstation_name → live master object (for Disable()/Enable() around a command;
+# see _run_isolated_command). Needed because the outstation's DNP3-TCP server only
+# tolerates one live link-address-1 session at a time — see module docstring on
+# _run_isolated_command for why the persistent polling connection must step aside.
 _masters = {}
+
+# One threading.Lock per outstation — serializes command dispatch so two overlapping
+# POST /command requests for the same outstation can't both Disable()/Enable() the same
+# master concurrently.
+_command_locks = {}
 
 
 # PURPOSE: Maps a GroupVariation to (data_type, is_float). Returns (None, None) if unknown.
@@ -175,16 +191,93 @@ def run_flask():
 
 
 # ---------------------------------------------------------------------------
-# Command callback — logs DirectOperate result asynchronously.
-# dnp3-python's DirectOperate() takes a plain callable (Callable[[ICommandTaskResult],
-# None]), not a subclass of an ICommandCallback interface — that interface does not
-# exist in this library version.
+# Isolated command worker — one throwaway OS process per DirectOperate
 # ---------------------------------------------------------------------------
-# PURPOSE: Builds a plain callable that logs a DirectOperate result asynchronously
-def _make_command_callback(label):
-    def _on_complete(result):
-        logging.info(f"DirectOperate result [{label}]: {result.summary}")
-    return _on_complete
+# dnp3-python 0.3.0b2 crashes the calling process when a command TASK COMPLETES — a
+# native asio-thread GIL fault that happens with Python *and* C++ completion callbacks
+# alike (same root cause the solar_plant_attack attacker works around — see
+# config/solar_plant_attack/logic/attack_logic.py). The persistent master connections
+# here already have live asio polling threads (AddClassScan), so we cannot fork() out of
+# this process the way the attacker does from its thread-free parent; instead every
+# command runs via subprocess.Popen (full exec into a new interpreter) so a crash on
+# completion only kills the disposable worker, never the polling master or the Flask API.
+#
+# PURPOSE: CLI entry point for the isolated command worker (invoked as a subprocess)
+def _cli_send_command(payload_json):
+    """Connect fresh to one outstation, send one DirectOperate, then exit.
+
+    Mirrors attack_logic.py's _connect/_inject_once/_inject_single: the outstation
+    executes the command on frame arrival (before the master processes the response),
+    so the command lands regardless of whether this worker crashes afterward.
+    """
+    payload = json.loads(payload_json)
+    manager = asiodnp3.DNP3Manager(1, asiodnp3.ConsoleLogger().Create())
+    channel = manager.AddTCPClient(
+        "client", opendnp3.levels.NORMAL, asiopal.ChannelRetry().Default(),
+        payload["ip"], "0.0.0.0", payload["port"],
+        asiodnp3.PrintingChannelListener().Create()
+    )
+    stack_config = asiodnp3.MasterStackConfig()
+    stack_config.master.responseTimeout = openpal.TimeDuration().Seconds(5)
+    stack_config.link.LocalAddr = payload["master_address"]
+    stack_config.link.RemoteAddr = payload["outstation_address"]
+
+    # Library C++ handlers, not Python subclasses — a Python override invoked from an
+    # asio worker thread races the GIL here (same reason attack_logic.py avoids them).
+    soe = asiodnp3.PrintingSOEHandler().Create()
+    application = asiodnp3.DefaultMasterApplication().Create()
+    master = channel.AddMaster("master", soe, application, stack_config)
+    master.Enable()
+
+    time.sleep(2)  # let the link establish before issuing the command
+
+    cmd_type, index, value = payload["type"], payload["index"], payload["value"]
+    label = f"{payload['ip']}:{cmd_type}[{index}]={value}"
+    callback = asiodnp3.PrintingCommandCallback.Get()
+    try:
+        if cmd_type == "binary_output":
+            code = opendnp3.ControlCode.LATCH_ON if int(value) else opendnp3.ControlCode.LATCH_OFF
+            master.DirectOperate(opendnp3.ControlRelayOutputBlock(code), int(index), callback)
+        else:
+            master.DirectOperate(opendnp3.AnalogOutputDouble64(float(value)), int(index), callback)
+        logging.info(f"command worker: sent {label}")
+    except Exception as e:
+        logging.error(f"command worker: failed to send {label}: {e}")
+
+    time.sleep(2)  # allow the frame to reach the outstation and be executed
+
+
+# PURPOSE: Steps the persistent polling master aside, runs the isolated command worker
+# alone on the wire, then resumes polling — all in a background thread.
+def _run_isolated_command(outstation_name, master, payload):
+    """The outstation's DNP3-TCP server only tolerates one live link-address-1 session
+    at a time (confirmed live: a second simultaneous connection from the same master
+    address makes both sessions flap, and queued DirectOperate frames get lost in the
+    churn). So the persistent polling master must Disable() — dropping its TCP session —
+    before the isolated worker (see _cli_send_command) connects alone, and Enable() again
+    once the worker is done. Runs in a background thread so the HTTP response returns
+    immediately; serialized per-outstation via _command_locks.
+    """
+    lock = _command_locks.setdefault(outstation_name, threading.Lock())
+    label = f"{outstation_name}:{payload['type']}[{payload['index']}]={payload['value']}"
+    with lock:
+        try:
+            master.Disable()
+        except Exception as e:
+            logging.error(f"command dispatch: Disable() failed for {outstation_name}: {e}")
+        time.sleep(0.5)  # let the outstation see the disconnect before the worker connects
+
+        try:
+            proc = subprocess.Popen([sys.executable, __file__, "--send-command", json.dumps(payload)])
+            proc.wait(timeout=10)
+        except Exception as e:
+            logging.error(f"command dispatch: worker failed [{label}]: {e}")
+
+        time.sleep(0.5)  # let the worker's connection fully close before resuming polling
+        try:
+            master.Enable()
+        except Exception as e:
+            logging.error(f"command dispatch: Enable() failed for {outstation_name}: {e}")
 
 
 # PURPOSE: Sends a DNP3 DirectOperate command (binary/analogue output) to an outstation
@@ -195,7 +288,10 @@ def send_command(outstation_name):
     Body JSON:
       { "type": "binary_output"|"analogue_output", "index": <int>, "value": <number> }
 
-    Returns 200 immediately (fire-and-forget); result is logged in container stdout.
+    Returns 200 immediately; the command runs in a background thread (see
+    _run_isolated_command) that briefly pauses this outstation's polling, runs the
+    command in an isolated worker process (see _cli_send_command) so its crash-on-
+    completion never reaches this process, then resumes polling.
     """
     body = request.get_json(force=True, silent=True) or {}
     cmd_type = body.get("type")
@@ -205,32 +301,29 @@ def send_command(outstation_name):
     if cmd_type is None or index is None or value is None:
         return jsonify({"error": "required fields: type, index, value"}), 400
 
+    if cmd_type not in ("binary_output", "analogue_output"):
+        return jsonify({"error": f"unsupported type: {cmd_type}"}), 400
+
     master = _masters.get(outstation_name)
-    if master is None:
+    meta = _outstation_meta.get(outstation_name)
+    if master is None or meta is None:
         return jsonify({"error": f"unknown outstation: {outstation_name}"}), 404
 
-    label = f"{outstation_name}:{cmd_type}[{index}]={value}"
-    try:
-        if cmd_type == "binary_output":
-            code = opendnp3.ControlCode.LATCH_ON if int(value) else opendnp3.ControlCode.LATCH_OFF
-            master.DirectOperate(
-                opendnp3.ControlRelayOutputBlock(code),
-                int(index),
-                _make_command_callback(label)
-            )
-        elif cmd_type == "analogue_output":
-            master.DirectOperate(
-                opendnp3.AnalogOutputDouble64(float(value)),
-                int(index),
-                _make_command_callback(label)
-            )
-        else:
-            return jsonify({"error": f"unsupported type: {cmd_type}"}), 400
-    except Exception as e:
-        logging.error(f"DirectOperate failed [{label}]: {e}")
-        return jsonify({"error": str(e)}), 500
+    payload = {
+        "ip": meta["ip"],
+        "port": meta["port"],
+        "outstation_address": meta["outstation_address"],
+        "master_address": meta["master_address"],
+        "type": cmd_type,
+        "index": int(index),
+        "value": float(value),
+    }
+    threading.Thread(
+        target=_run_isolated_command, args=(outstation_name, master, payload), daemon=True
+    ).start()
 
-    logging.info(f"DirectOperate queued: {label}")
+    logging.info(f"DirectOperate dispatched to isolated worker: "
+                 f"{outstation_name}:{cmd_type}[{index}]={value}")
     return jsonify({"queued": True, "outstation": outstation_name,
                     "type": cmd_type, "index": index, "value": value})
 
@@ -377,6 +470,12 @@ def main():
         soe_handlers.append(soe)
         applications.append(app)
         _masters[outstation_entry["name"]] = master
+        _outstation_meta[outstation_entry["name"]] = {
+            "ip": outstation_entry["ip"],
+            "port": outstation_entry.get("port", 20000),
+            "outstation_address": outstation_entry["outstation_address"],
+            "master_address": configs["master_address"],
+        }
 
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
@@ -386,4 +485,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "--send-command":
+        _cli_send_command(sys.argv[2])
+    else:
+        main()

@@ -108,7 +108,7 @@ docker compose build && docker compose up -d
 | `dnp3_outstation` | `GET /registers`                     | Current data point values (dashboard)      |
 | `dnp3_master`     | `GET /registers`                     | Flattened values across all outstations    |
 | `dnp3_master`     | `GET /registers/<outstation_name>`   | Values for one outstation                  |
-| `dnp3_master`     | `POST /command/<outstation_name>`    | DirectOperate — `{"type": "binary_output"\|"analogue_output", "index": int, "value": number}` |
+| `dnp3_master`     | `POST /command/<outstation_name>`    | DirectOperate — `{"type": "binary_output"\|"analogue_output", "index": int, "value": number}`. Runs in an isolated worker process (see "dnp3-python command path crashes on completion" below) — safe to call repeatedly. |
 
 ### Test suite
 
@@ -179,15 +179,31 @@ Schema reference: `.claude/doc/solar-plant-config.md`
   `network` dict or a `networks` list (dual-homed); `build_network_yaml` already loops
   over `ip_networks`, so adding `vlan_it` needs no code change.
 - **dnp3-python command path crashes on completion (0.3.0b2)**: issuing a DirectOperate
-  reliably delivers the frame AND drives the outstation, but the master process then dies
-  when the command task completes — a native asio-thread GIL fault (`PyThreadState_Get ...
-  thread state NULL`) that happens with Python *or* C++ completion callbacks alike. The
-  legitimate master (`POST /command`) dodges it only because commands are rare. The
-  attacker works around it in `attack_logic.py` by forking **one child process per single
-  command** (`_inject_single`): the outstation executes FC 0x03 on frame arrival — before
-  the master processes the response — so every injection lands before its child crashes,
-  and the long-running parent loop survives. Do not "simplify" this back to a persistent
-  master issuing multiple commands; it will crash after the first command every cycle.
+  (FC 0x05 — not 0x03, that's Select; confirmed on the wire) reliably delivers the frame
+  AND drives the outstation, but the calling process then dies when the command task
+  completes — a native asio-thread GIL fault (`PyThreadState_Get ... thread state NULL`)
+  that happens with Python *or* C++ completion callbacks alike. Live-reproduced on the
+  **legitimate** master too (2026-11-08): the old code called `DirectOperate()` directly
+  on the persistent polling master object, so the very first real command killed `scada`
+  outright (exit 139) with no `restart:` policy to recover it — this broke
+  `tests/integration/test_dnp3_comms.py` from I-07b onward if ever run live.
+  **Fixed** in `src/components/dnp3_master.py`: `POST /command/<name>` now spawns a
+  background thread (`_run_isolated_command`) that (1) `master.Disable()`s the
+  persistent connection to that one outstation — confirmed live that a *second*
+  simultaneous TCP session on the same link address makes both flap and silently drops
+  queued commands, so the persistent session must step aside first, not just be a second
+  connection running alongside it; (2) runs the command in a disposable child OS process
+  (`_cli_send_command`, invoked via `subprocess.Popen([sys.executable, __file__,
+  "--send-command", ...])` — a real `exec()`, not `fork()`, since this process already
+  has live asio polling threads and forking those is unsafe) that connects fresh, sends
+  one DirectOperate, and exits — any crash is contained to that worker; (3)
+  `master.Enable()`s polling again. A per-outstation `threading.Lock` in
+  `_command_locks` serializes overlapping requests to the same outstation. The attacker's
+  own workaround in `config/solar_plant_attack/logic/attack_logic.py` (`_inject_single`,
+  forking **one child process per command**) is a different, narrower case — it works
+  because that parent process never creates its own `DNP3Manager`/asio threads, so
+  `fork()` is safe there specifically; do not port that fork-based pattern into
+  `dnp3_master.py`, which does have live asio threads.
 - **Phase 1 command-handler bugs fixed in Activity 2** (`src/components/dnp3_outstation.py`
   — only ever exercised once a control command is actually sent): (1) `ICommandHandler`'s
   pure virtual is `Start()`, not `Begin()` — the old name aborted the outstation on the
