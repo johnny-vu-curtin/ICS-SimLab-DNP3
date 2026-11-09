@@ -81,20 +81,28 @@ vlan_it  192.168.1.0/24          vlan_ot  192.168.0.0/24
 
 ## DNP3 function codes — must be implemented
 
-These function codes are required for correct operation and future attack simulation:
+These function codes are required for correct operation and future attack simulation.
+**Corrected 2026-11-08** — a live capture (tshark DNP3 dissector on `ics_ot_network`)
+showed the real wire values for Direct Operate/Restart differ from earlier drafts of
+this table; real IEEE 1815 numbering used below:
 
 | FC   | Name                    | Required for              |
 |------|-------------------------|---------------------------|
 | 0x01 | Read                    | Class polls               |
 | 0x02 | Write                   | Time sync, control output |
-| 0x03 | Direct Operate          | Control commands          |
-| 0x04 | Direct Operate No Ack   | Attack DoS variant        |
-| 0x07 | Warm Restart            | Attack: warm restart      |
-| 0x0D | Cold Restart            | Attack: cold restart      |
-| 0x14 | Enable Unsolicited      | Normal operation          |
-| 0x15 | Disable Unsolicited     | Attack: block events      |
+| 0x03 | Select                  | Select-Before-Operate (step 1) |
+| 0x04 | Operate                 | Select-Before-Operate (step 2) |
+| 0x05 | Direct Operate          | Control commands — confirmed on wire (not 0x03) |
+| 0x06 | Direct Operate No Ack   | Attack DoS variant        |
+| 0x0D | Cold Restart            | Attack: cold restart — confirmed on wire |
+| 0x0E | Warm Restart            | Attack: warm restart (not 0x07 — that's Immediate Freeze, unused here) |
+| 0x14 | Enable Unsolicited      | Normal operation — confirmed on wire |
+| 0x15 | Disable Unsolicited     | Attack: block events — confirmed on wire |
 | 0x81 | Response                | All responses              |
-| 0x82 | Unsolicited Response    | Event-driven reporting    |
+| 0x82 | Unsolicited Response    | Event-driven reporting — confirmed on wire |
+
+(The earlier "FC 0x80: File transfer" entry in `attack-support.md` doesn't correspond to
+any real DNP3 function code — real file-transfer operations are FC 0x19–0x1E.)
 
 ---
 
@@ -146,12 +154,13 @@ support (Activity 2) vs. what `dnp3_master.py` / `dnp3_outstation.py` implement 
 | Feature                            | Status                                                                         |
 |-------------------------------------|---------------------------------------------------------------------------------|
 | FC 0x01 Read / Class 0–3 polls      | Implemented — `master.AddClassScan(ClassField.AllClasses(), ...)`              |
-| FC 0x03/0x04 Direct Operate         | Implemented — `SolarCommandHandler.Operate()` (CROB + AnalogOutput*)           |
+| FC 0x05 Direct Operate              | Implemented — `SolarCommandHandler.Operate()` (CROB + AnalogOutput*). Delivery confirmed live; **the calling process used to crash on command-task completion (dnp3-python 0.3.0b2 bug) — fixed 2026-11-08, see CLAUDE.md "dnp3-python command path crashes on completion"** |
 | Unsolicited responses (FC 0x82)     | Implemented — `allowUnsolicited=True`, `EventMode.Detect` + per-point deadband |
 | Group 30/32 Analogue Input (+Event) | Implemented                                                                    |
 | Group 1/2 Binary Input (+Event)     | Implemented                                                                    |
 | Group 12 CROB / Group 41 AO         | Implemented                                                                    |
-| FC 0x07/0x0D Warm/Cold Restart      | Not implemented — `WarmRestartSupport`/`ColdRestartSupport` return `RestartMode.UNSUPPORTED` (needed for attack #6) |
+| FC 0x03/0x04 Select-Before-Operate  | Nominally present (`SolarCommandHandler.Select()` exists to satisfy the interface) but unconditionally returns `SUCCESS` — no real reservation/timeout state, so not meaningfully implemented |
+| FC 0x0E/0x0D Warm/Cold Restart      | Not implemented — `WarmRestartSupport`/`ColdRestartSupport` return `RestartMode.UNSUPPORTED` (needed for attack #6). Confirmed live 2026-11-08: outstation correctly rejects Cold Restart via an IIN error bit, master gets `TaskCompletion.FAILURE_BAD_RESPONSE` — no crash, this is correct DNP3 behaviour for an unsupported feature |
 | Group 50 Time sync (Write)          | Stub only — `WriteAbsoluteTime()` logs and returns `True`; value is not stored or reused (needed for attack #7) |
 
 ---
