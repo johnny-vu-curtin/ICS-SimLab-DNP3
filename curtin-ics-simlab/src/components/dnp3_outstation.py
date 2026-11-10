@@ -7,6 +7,7 @@
 # from a DNP3 Master and writes them back to SQLite for the HIL to consume.
 # Also exposes a REST API on port 1111 for the Streamlit dashboard.
 
+import os
 import json
 import re
 import time
@@ -167,16 +168,26 @@ class SolarOutstationApplication(opendnp3.IOutstationApplication):
         pass
 
     def WarmRestartSupport(self):
-        return opendnp3.RestartMode.UNSUPPORTED
+        return opendnp3.RestartMode.SUPPORTED_DELAY_COARSE
 
     def ColdRestartSupport(self):
-        return opendnp3.RestartMode.UNSUPPORTED
+        return opendnp3.RestartMode.SUPPORTED_DELAY_COARSE
 
+    # PURPOSE: Handles FC 0x0E Warm Restart — the DNP3 application layer's own sequence
+    # counters and event buffer are owned and reset internally by the opendnp3 stack once
+    # this returns; there is no app-level state here that needs separate resetting.
     def WarmRestart(self):
-        return 0xFFFF
+        logging.warning("Warm restart requested (FC 0x0E)")
+        return 2  # seconds until restart complete (SUPPORTED_DELAY_COARSE unit)
 
+    # PURPOSE: Handles FC 0x0D Cold Restart — exits the process after a short delay (long
+    # enough for the stack to send this response first) so Docker's restart policy brings
+    # the container back up with a fully fresh process, matching real cold-restart
+    # behaviour. Requires `restart: unless-stopped` on this container (src/setup.py).
     def ColdRestart(self):
-        return 0xFFFF
+        logging.warning("Cold restart requested (FC 0x0D) — exiting in 2s for Docker to restart this container")
+        threading.Timer(2.0, lambda: os._exit(0)).start()
+        return 2  # seconds until restart complete (SUPPORTED_DELAY_COARSE unit)
 
 
 # ---------------------------------------------------------------------------
