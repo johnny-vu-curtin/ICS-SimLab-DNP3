@@ -38,7 +38,14 @@ solar_irradiance ──┬──> panel_temperature
 
 4. **`active_power, voltage_ac → current_ac`** — `current = active_power / voltage_ac`
    (P = V × I). This is a hard physics relationship; never compute `current_ac`
-   independently of `active_power`.
+   independently of `active_power`. **Single-phase formula, confirmed correct for this
+   scenario 2026-11-10** — at ~9kW peak per inverter (`PANEL_AREA_M2=50`) with no
+   line-to-line grid reference anywhere in this scenario, treating it as single-phase is
+   a legitimate real-world case (small-scale single-phase inverters commonly go up to
+   ~10kW). Do NOT port over `config/solar_plant_500kw`'s 3-phase correction
+   (`current_ac = active_power / (3 × voltage_ac)`) into this scenario — that fix is
+   specific to `solar_plant_500kw` explicitly modelling a 400V line-to-line grid bus,
+   which this scenario does not have.
 
 5. **`voltage_ac` — independent random walk** (σ=1V/step, clamped ±10V from 230V
    nominal). **Known simplification**: this scenario has no `grid_voltage`/PCC concept,
