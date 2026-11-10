@@ -109,6 +109,8 @@ docker compose build && docker compose up -d
 | `dnp3_master`     | `GET /registers`                     | Flattened values across all outstations    |
 | `dnp3_master`     | `GET /registers/<outstation_name>`   | Values for one outstation                  |
 | `dnp3_master`     | `POST /command/<outstation_name>`    | DirectOperate — `{"type": "binary_output"\|"analogue_output", "index": int, "value": number}`. Runs in an isolated worker process (see "dnp3-python command path crashes on completion" below) — safe to call repeatedly. |
+| `dnp3_master`     | `POST /restart/<outstation_name>`    | Warm/Cold Restart (FC 0x0E/0x0D) — `{"type": "warm"\|"cold"}`. Same isolated-worker treatment as `/command` — `Restart()`'s completion crashes the calling process too. |
+| `dnp3_master`     | `POST /unsolicited/<outstation_name>` | Enable/Disable Unsolicited (FC 0x14/0x15) — `{"action": "enable"\|"disable"}`. No command-task involved, so no crash risk and no isolation needed. |
 
 ### Test suite
 
@@ -202,6 +204,25 @@ Schema reference: `.claude/doc/solar-plant-config.md`
   because that parent process never creates its own `DNP3Manager`/asio threads, so
   `fork()` is safe there specifically; do not port that fork-based pattern into
   `dnp3_master.py`, which does have live asio threads.
+- **`Restart()` has the exact same crash-on-completion bug as `DirectOperate()`**
+  (confirmed live 2026-11-10 while implementing FC 0x0D/0x0E): once the outstation
+  actually supports restart and the task completes with `TaskCompletion.SUCCESS`, the
+  calling process dies with the identical `PyThreadState_Get` GIL fault — this is a
+  general "any command-task completion crashes the caller" bug, not specific to
+  DirectOperate. An earlier ad-hoc test only hit the *rejection* path
+  (`TaskCompletion.FAILURE_BAD_RESPONSE` against the old UNSUPPORTED outstation), which
+  did **not** crash — don't assume a success-free test clears an operation as safe.
+  `POST /restart/<name>` uses the same `_run_isolated_restart`/`_cli_send_restart`
+  Disable/isolated-worker/Enable pattern as `/command`. By contrast, `/unsolicited/<name>`
+  (FC 0x14/0x15 via `master.PerformFunction()`) takes no callback at all — no task, no
+  completion event, no crash — confirmed safe without isolation.
+- **Isolated worker teardown routinely exceeds a short `proc.wait()` timeout** — the
+  worker's own Fatal Python error handler dumping every thread's stack measurably delays
+  the OS reporting it as exited (observed >10s, sometimes >20s, for the restart worker).
+  The operation itself (DirectOperate or Restart) completes and gets logged by the worker
+  well before this — a lingering worker past the timeout is expected, not a failure.
+  `_wait_or_kill()` treats it as such: logs at INFO, kills the process outright, and moves
+  on to `Enable()` rather than treating a slow-to-die worker as an error.
 - **Phase 1 command-handler bugs fixed in Activity 2** (`src/components/dnp3_outstation.py`
   — only ever exercised once a control command is actually sent): (1) `ICommandHandler`'s
   pure virtual is `Start()`, not `Begin()` — the old name aborted the outstation on the

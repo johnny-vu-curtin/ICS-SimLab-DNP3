@@ -444,6 +444,10 @@ def build_dnp3_outstation_yaml(json_content):
             "build": build,
             "container_name": container_name,
             "privileged": True,
+            # Required for FC 0x0D Cold Restart (dnp3_outstation.py's ColdRestart()
+            # exits the process on purpose) to actually behave like a restart instead
+            # of a permanent outage.
+            "restart": "unless-stopped",
             "volumes": volumes,
             "ports": [1111],
             "command": ["python3", "-u", "dnp3_outstation.py"],
