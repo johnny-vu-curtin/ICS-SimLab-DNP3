@@ -49,10 +49,19 @@ grid_connected (PCC breaker)    ──> inverter_status (AND'd in, alongside pow
    **no battery storage** (confirmed requirement) — it cannot energise islanded. If
    `grid_connected` ever goes false, every inverter must show offline, full stop.
 
-5. **All other rules from the base scenario still apply unchanged**: irradiance →
-   temperature → power chain, temperature derating, `current_ac = active_power /
-   voltage_ac`, `fault_alarm` from voltage-or-frequency deviation, `fault_alarm`
-   excluding `inverter_status`.
+5. **Most other rules from the base scenario still apply unchanged**: irradiance →
+   temperature → power chain, temperature derating, `fault_alarm` from
+   voltage-or-frequency deviation, `fault_alarm` excluding `inverter_status`.
+
+6. **`current_ac` — 3-phase formula, NOT the base scenario's `current_ac = active_power /
+   voltage_ac`** (fixed 2026-11-10, was overstating current 3x). This scenario explicitly
+   models a 3-phase system (`grid_voltage` is the 400V line-to-line PCC bus, `voltage_ac`
+   above is derived as *phase* voltage via `/√3`), so per-phase line current at unity
+   power factor must use the 3-phase relationship: `current_ac = active_power / (3 ×
+   voltage_ac)`, equivalently `active_power / (√3 × V_line-to-line)`. The base scenario's
+   `current_ac = active_power / voltage_ac` is the single-phase formula — correct *there*
+   only because that scenario never introduces a line-to-line grid voltage to contradict
+   it. Don't copy that formula back here if re-syncing with the base scenario's logic.
 
 ## Constants specific to this scenario
 

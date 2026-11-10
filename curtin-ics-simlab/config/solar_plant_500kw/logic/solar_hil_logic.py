@@ -22,7 +22,11 @@ from threading import Thread
 #                 bus) plus a small feeder voltage-rise proportional to active_power
 #                 injection, plus small local measurement noise — not an independent
 #                 random walk, since terminal voltage is tied to the upstream grid.
-#   current_ac  — derived from power / voltage
+#   current_ac  — per-phase line current for a balanced 3-phase inverter at unity power
+#                 factor: active_power / (3 × voltage_ac), i.e. P / (√3 × V_line-to-line).
+#                 (NOT active_power / voltage_ac — that single-phase formula overstates
+#                 current 3x here, since voltage_ac is phase voltage. Caught in review
+#                 2026-11-10.)
 #   frequency   — locked to grid_frequency plus small measurement noise (a grid-tied
 #                 inverter's PLL synchronises to the grid; it cannot run at its own
 #                 independent frequency)
@@ -148,8 +152,12 @@ def _electrical_sim(pv):
         voltage = base_voltage + voltage_rise + random.gauss(0, 0.5)
         voltage = max(NOMINAL_VOLTAGE - 10.0, min(NOMINAL_VOLTAGE + 10.0, voltage))
 
-        # Current derived from power
-        current = (active_power / voltage) if voltage > 0 else 0.0
+        # Current derived from power — this is a 3-phase inverter (voltage above is
+        # phase voltage, derived from the 400V line-to-line grid bus), so per-phase line
+        # current at unity power factor is P / (√3 · V_LL) = P / (3 · V_phase), not
+        # P / V_phase. Using the single-phase formula here overstated current 3x (e.g.
+        # ~374A instead of ~127A at 88kW/400V_LL — caught in review 2026-11-10).
+        current = (active_power / (3.0 * voltage)) if voltage > 0 else 0.0
 
         # Frequency: locked to the grid reference plus small measurement noise — a
         # grid-tied inverter's PLL synchronises to the grid, it cannot drift on its own.
