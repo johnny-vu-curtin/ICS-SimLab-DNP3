@@ -247,6 +247,66 @@ def _cli_send_command(payload_json):
     time.sleep(2)  # allow the frame to reach the outstation and be executed
 
 
+# PURPOSE: CLI entry point for the isolated restart worker (invoked as a subprocess)
+def _cli_send_restart(payload_json):
+    """Connect fresh to one outstation, send one Restart (warm/cold), then exit.
+
+    Restart()'s completion crashes the calling process exactly like DirectOperate's does
+    (verified live 2026-11-10: TaskCompletion.SUCCESS on a warm restart killed scada with
+    the same PyThreadState_Get GIL fault) — same isolation treatment, same reason.
+    """
+    payload = json.loads(payload_json)
+    manager = asiodnp3.DNP3Manager(1, asiodnp3.ConsoleLogger().Create())
+    channel = manager.AddTCPClient(
+        "client", opendnp3.levels.NORMAL, asiopal.ChannelRetry().Default(),
+        payload["ip"], "0.0.0.0", payload["port"],
+        asiodnp3.PrintingChannelListener().Create()
+    )
+    stack_config = asiodnp3.MasterStackConfig()
+    stack_config.master.responseTimeout = openpal.TimeDuration().Seconds(5)
+    stack_config.link.LocalAddr = payload["master_address"]
+    stack_config.link.RemoteAddr = payload["outstation_address"]
+
+    soe = asiodnp3.PrintingSOEHandler().Create()
+    application = asiodnp3.DefaultMasterApplication().Create()
+    master = channel.AddMaster("master", soe, application, stack_config)
+    master.Enable()
+
+    time.sleep(2)  # let the link establish before issuing the restart
+
+    restart_type = payload["restart_type"]
+    label = f"{payload['ip']}:{restart_type}_restart"
+
+    def _on_complete(result):
+        logging.info(f"restart worker: result [{label}]: {result.summary}")
+
+    try:
+        rtype = opendnp3.RestartType.WARM if restart_type == "warm" else opendnp3.RestartType.COLD
+        master.Restart(rtype, _on_complete)
+        logging.info(f"restart worker: sent {label}")
+    except Exception as e:
+        logging.error(f"restart worker: failed to send {label}: {e}")
+
+    time.sleep(2)  # allow the request + response to complete before this worker exits
+
+
+# PURPOSE: Waits for an isolated worker, but doesn't treat a lingering process as an
+# error — the worker's own crash-on-task-completion (see _cli_send_command/_cli_send_
+# restart) can take well over 10s to actually tear down (observed live: the Fatal Python
+# error handler dumping every thread's stack measurably delays process exit), even though
+# the DNP3 operation itself already completed and was logged by the worker. By the time
+# this timeout fires the job is done either way, so a lingering worker is expected and
+# gets killed outright rather than waited on indefinitely.
+def _wait_or_kill(proc, label, timeout=8):
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logging.info(f"worker for [{label}] still tearing down after {timeout}s — killing it "
+                     f"(the operation itself already completed; see the worker's own log line)")
+        proc.kill()
+        proc.wait()
+
+
 # PURPOSE: Steps the persistent polling master aside, runs the isolated command worker
 # alone on the wire, then resumes polling — all in a background thread.
 def _run_isolated_command(outstation_name, master, payload):
@@ -269,7 +329,7 @@ def _run_isolated_command(outstation_name, master, payload):
 
         try:
             proc = subprocess.Popen([sys.executable, __file__, "--send-command", json.dumps(payload)])
-            proc.wait(timeout=10)
+            _wait_or_kill(proc, label)
         except Exception as e:
             logging.error(f"command dispatch: worker failed [{label}]: {e}")
 
@@ -326,6 +386,106 @@ def send_command(outstation_name):
                  f"{outstation_name}:{cmd_type}[{index}]={value}")
     return jsonify({"queued": True, "outstation": outstation_name,
                     "type": cmd_type, "index": index, "value": value})
+
+
+# PURPOSE: Steps the persistent polling master aside, runs the isolated restart worker
+# alone on the wire, then resumes polling — all in a background thread. Same Disable/
+# isolated-worker/Enable treatment as _run_isolated_command, and for the same reason:
+# Restart()'s completion crashes the calling process just as much as DirectOperate's does
+# (confirmed live 2026-11-10 — see _cli_send_restart).
+def _run_isolated_restart(outstation_name, master, payload):
+    lock = _command_locks.setdefault(outstation_name, threading.Lock())
+    label = f"{outstation_name}:{payload['restart_type']}_restart"
+    with lock:
+        try:
+            master.Disable()
+        except Exception as e:
+            logging.error(f"restart dispatch: Disable() failed for {outstation_name}: {e}")
+        time.sleep(0.5)
+
+        try:
+            proc = subprocess.Popen([sys.executable, __file__, "--send-restart", json.dumps(payload)])
+            _wait_or_kill(proc, label)
+        except Exception as e:
+            logging.error(f"restart dispatch: worker failed [{label}]: {e}")
+
+        time.sleep(0.5)
+        try:
+            master.Enable()
+        except Exception as e:
+            logging.error(f"restart dispatch: Enable() failed for {outstation_name}: {e}")
+
+
+# PURPOSE: Sends FC 0x0D Cold Restart or FC 0x0E Warm Restart to an outstation
+@app.route("/restart/<outstation_name>", methods=["POST"])
+def send_restart(outstation_name):
+    """Send a DNP3 Restart request to an outstation.
+
+    Body JSON: { "type": "warm"|"cold" }
+
+    Runs via the same isolation pattern as /command — Restart()'s completion crashes
+    the calling process exactly like DirectOperate's does (confirmed live), so this
+    never touches the persistent polling master's own Restart() call.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    restart_type = body.get("type")
+    if restart_type not in ("warm", "cold"):
+        return jsonify({"error": "required field: type ('warm' or 'cold')"}), 400
+
+    master = _masters.get(outstation_name)
+    meta = _outstation_meta.get(outstation_name)
+    if master is None or meta is None:
+        return jsonify({"error": f"unknown outstation: {outstation_name}"}), 404
+
+    payload = {
+        "ip": meta["ip"],
+        "port": meta["port"],
+        "outstation_address": meta["outstation_address"],
+        "master_address": meta["master_address"],
+        "restart_type": restart_type,
+    }
+    threading.Thread(
+        target=_run_isolated_restart, args=(outstation_name, master, payload), daemon=True
+    ).start()
+
+    logging.info(f"Restart dispatched to isolated worker: {outstation_name}:{restart_type}_restart")
+    return jsonify({"queued": True, "outstation": outstation_name, "type": restart_type})
+
+
+# PURPOSE: Sends FC 0x14 Enable Unsolicited or FC 0x15 Disable Unsolicited to an outstation
+@app.route("/unsolicited/<outstation_name>", methods=["POST"])
+def send_unsolicited_toggle(outstation_name):
+    """Enable or disable unsolicited responses (Class 1/2/3) on an outstation.
+
+    Body JSON: { "action": "enable"|"disable" }
+
+    PerformFunction() is a plain function-code-only request with no completion task,
+    so there's no command-style crash risk to isolate here either.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    action = body.get("action")
+    if action not in ("enable", "disable"):
+        return jsonify({"error": "required field: action ('enable' or 'disable')"}), 400
+
+    master = _masters.get(outstation_name)
+    if master is None:
+        return jsonify({"error": f"unknown outstation: {outstation_name}"}), 404
+
+    func = opendnp3.FunctionCode.ENABLE_UNSOLICITED if action == "enable" else opendnp3.FunctionCode.DISABLE_UNSOLICITED
+    headers = [
+        opendnp3.Header.From(opendnp3.PointClass.Class1),
+        opendnp3.Header.From(opendnp3.PointClass.Class2),
+        opendnp3.Header.From(opendnp3.PointClass.Class3),
+    ]
+    label = f"{outstation_name}:{action}_unsolicited"
+    try:
+        master.PerformFunction(label, func, headers)
+    except Exception as e:
+        logging.error(f"PerformFunction failed [{label}]: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    logging.info(f"Unsolicited toggle queued: {label}")
+    return jsonify({"queued": True, "outstation": outstation_name, "action": action})
 
 
 # ---------------------------------------------------------------------------
@@ -487,5 +647,7 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--send-command":
         _cli_send_command(sys.argv[2])
+    elif len(sys.argv) > 2 and sys.argv[1] == "--send-restart":
+        _cli_send_restart(sys.argv[2])
     else:
         main()
