@@ -290,6 +290,41 @@ def _cli_send_restart(payload_json):
     time.sleep(2)  # allow the request + response to complete before this worker exits
 
 
+# PURPOSE: CLI entry point for the isolated time-sync worker (invoked as a subprocess)
+def _cli_send_timesync(payload_json):
+    """Connect fresh to one outstation with timeSyncMode=LAN, then exit.
+
+    There's no explicit "sync now" call to make — the moment this connection sees the
+    outstation's NEED_TIME IIN bit (dnp3_outstation.py's GetApplicationIIN()), the stack
+    runs its "LAN time sync" task automatically. That task crashes the calling process
+    outright (confirmed live 2026-11-11: uncaught C++ `pybind11::cast_error`, `terminate()`
+    called — not a catchable Python GIL fault like DirectOperate/Restart, can't be
+    try/excepted at all). Hence isolating it into this disposable worker is the only way
+    to exercise it without taking the persistent polling master down with it.
+    """
+    payload = json.loads(payload_json)
+    manager = asiodnp3.DNP3Manager(1, asiodnp3.ConsoleLogger().Create())
+    channel = manager.AddTCPClient(
+        "client", opendnp3.levels.NORMAL, asiopal.ChannelRetry().Default(),
+        payload["ip"], "0.0.0.0", payload["port"],
+        asiodnp3.PrintingChannelListener().Create()
+    )
+    stack_config = asiodnp3.MasterStackConfig()
+    stack_config.master.responseTimeout = openpal.TimeDuration().Seconds(5)
+    stack_config.master.timeSyncMode = opendnp3.TimeSyncMode.LAN
+    stack_config.link.LocalAddr = payload["master_address"]
+    stack_config.link.RemoteAddr = payload["outstation_address"]
+
+    soe = asiodnp3.PrintingSOEHandler().Create()
+    application = asiodnp3.DefaultMasterApplication().Create()
+    master = channel.AddMaster("master", soe, application, stack_config)
+    master.Enable()
+
+    logging.info(f"timesync worker: connected to {payload['ip']} with timeSyncMode=LAN — "
+                 f"waiting for the automatic LAN time sync task to run")
+    time.sleep(5)  # let the link establish and the automatic task run (and crash)
+
+
 # PURPOSE: Waits for an isolated worker, but doesn't treat a lingering process as an
 # error — the worker's own crash-on-task-completion (see _cli_send_command/_cli_send_
 # restart) can take well over 10s to actually tear down (observed live: the Fatal Python
@@ -452,6 +487,63 @@ def send_restart(outstation_name):
     return jsonify({"queued": True, "outstation": outstation_name, "type": restart_type})
 
 
+# PURPOSE: Steps the persistent polling master aside, runs the isolated time-sync worker
+# alone on the wire, then resumes polling — all in a background thread. Same pattern as
+# _run_isolated_restart, for the same reason: the automatic LAN time sync task crashes
+# whatever process runs it (confirmed live 2026-11-11 — see _cli_send_timesync).
+def _run_isolated_timesync(outstation_name, master, payload):
+    lock = _command_locks.setdefault(outstation_name, threading.Lock())
+    label = f"{outstation_name}:timesync"
+    with lock:
+        try:
+            master.Disable()
+        except Exception as e:
+            logging.error(f"timesync dispatch: Disable() failed for {outstation_name}: {e}")
+        time.sleep(0.5)
+
+        try:
+            proc = subprocess.Popen([sys.executable, __file__, "--send-timesync", json.dumps(payload)])
+            _wait_or_kill(proc, label)
+        except Exception as e:
+            logging.error(f"timesync dispatch: worker failed [{label}]: {e}")
+
+        time.sleep(0.5)
+        try:
+            master.Enable()
+        except Exception as e:
+            logging.error(f"timesync dispatch: Enable() failed for {outstation_name}: {e}")
+
+
+# PURPOSE: Triggers a DNP3 LAN time sync against an outstation in an isolated worker
+@app.route("/timesync/<outstation_name>", methods=["POST"])
+def send_timesync(outstation_name):
+    """Trigger a Group 50 LAN time sync against an outstation.
+
+    No body required. Runs in an isolated worker (see _run_isolated_timesync) — the
+    persistent polling master NEVER runs this itself (its timeSyncMode is deliberately
+    None, not LAN — see build_master_connection) because the automatic task crashes the
+    calling process outright via an uncaught C++ exception, confirmed live. This endpoint
+    exists only to demonstrate/exercise the feature safely in a disposable process.
+    """
+    master = _masters.get(outstation_name)
+    meta = _outstation_meta.get(outstation_name)
+    if master is None or meta is None:
+        return jsonify({"error": f"unknown outstation: {outstation_name}"}), 404
+
+    payload = {
+        "ip": meta["ip"],
+        "port": meta["port"],
+        "outstation_address": meta["outstation_address"],
+        "master_address": meta["master_address"],
+    }
+    threading.Thread(
+        target=_run_isolated_timesync, args=(outstation_name, master, payload), daemon=True
+    ).start()
+
+    logging.info(f"Time sync dispatched to isolated worker: {outstation_name}")
+    return jsonify({"queued": True, "outstation": outstation_name})
+
+
 # PURPOSE: Sends FC 0x14 Enable Unsolicited or FC 0x15 Disable Unsolicited to an outstation
 @app.route("/unsolicited/<outstation_name>", methods=["POST"])
 def send_unsolicited_toggle(outstation_name):
@@ -511,7 +603,14 @@ def build_master_connection(manager, master_config_entry, outstation_entry, poll
 
     stack_config = asiodnp3.MasterStackConfig()
     stack_config.master.responseTimeout = openpal.TimeDuration().Seconds(5)
-    stack_config.master.timeSyncMode = opendnp3.TimeSyncMode.LAN
+    # NOT TimeSyncMode.LAN here — confirmed live 2026-11-11: the instant any outstation
+    # reports IINBit.NEED_TIME (which dnp3_outstation.py now does), this persistent
+    # connection's own "LAN time sync" task crashes the whole process outright via an
+    # uncaught C++ exception (`terminate() ... pybind11::cast_error`) — not a Python GIL
+    # fault like DirectOperate/Restart, so it can't even be try/excepted, and it fires
+    # automatically with no REST call to isolate around. Time sync is only exercised via
+    # the isolated /timesync endpoint below, never on this persistent connection.
+    stack_config.master.timeSyncMode = getattr(opendnp3.TimeSyncMode, "None")
     stack_config.link.LocalAddr = master_addr
     stack_config.link.RemoteAddr = outstation_addr
 
@@ -649,5 +748,7 @@ if __name__ == "__main__":
         _cli_send_command(sys.argv[2])
     elif len(sys.argv) > 2 and sys.argv[1] == "--send-restart":
         _cli_send_restart(sys.argv[2])
+    elif len(sys.argv) > 2 and sys.argv[1] == "--send-timesync":
+        _cli_send_timesync(sys.argv[2])
     else:
         main()
