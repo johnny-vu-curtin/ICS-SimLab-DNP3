@@ -111,6 +111,7 @@ docker compose build && docker compose up -d
 | `dnp3_master`     | `POST /command/<outstation_name>`    | DirectOperate — `{"type": "binary_output"\|"analogue_output", "index": int, "value": number}`. Runs in an isolated worker process (see "dnp3-python command path crashes on completion" below) — safe to call repeatedly. |
 | `dnp3_master`     | `POST /restart/<outstation_name>`    | Warm/Cold Restart (FC 0x0E/0x0D) — `{"type": "warm"\|"cold"}`. Same isolated-worker treatment as `/command` — `Restart()`'s completion crashes the calling process too. |
 | `dnp3_master`     | `POST /unsolicited/<outstation_name>` | Enable/Disable Unsolicited (FC 0x14/0x15) — `{"action": "enable"\|"disable"}`. No command-task involved, so no crash risk and no isolation needed. |
+| `dnp3_master`     | `POST /timesync/<outstation_name>`    | Triggers a Group 50 LAN time sync. No body. Isolated-worker only — the persistent master never runs this itself (see "LAN time sync task crashes" below). |
 
 ### Test suite
 
@@ -225,6 +226,27 @@ Schema reference: `.claude/doc/solar-plant-config.md`
   well before this — a lingering worker past the timeout is expected, not a failure.
   `_wait_or_kill()` treats it as such: logs at INFO, kills the process outright, and moves
   on to `Enable()` rather than treating a slow-to-die worker as an error.
+- **LAN time sync task crashes — worse than the DirectOperate/Restart bug, and automatic**
+  (found 2026-11-11 while adding `GetApplicationIIN()`'s `NEED_TIME` reporting to
+  `dnp3_outstation.py`, which was needed for `master.timeSyncMode=LAN` to ever trigger
+  anything at all — see "Group 50 time sync never triggers" above for why it never had
+  before). The instant a master with `timeSyncMode=LAN` sees `IINBit.NEED_TIME`, its "LAN
+  time sync" task crashes the calling process with `terminate() ... pybind11::cast_error`
+  — an **uncaught C++ exception**, not the `PyThreadState_Get` GIL fault DirectOperate/
+  Restart hit, so it cannot be `try`/`except`-ed at all, in Python or otherwise. Confirmed
+  live: enabling `NEED_TIME` reporting on the outstation while the persistent master still
+  had `timeSyncMode=LAN` crashed `scada` on **every single startup**, 100% reproducible,
+  because `_last_sync_time is None` makes `NEED_TIME` true from the very first response —
+  this is a regression far more severe than DirectOperate's, since the master didn't need
+  any REST call to trigger it, just existing. **Fixed**: the persistent master connections
+  in `build_master_connection()` use `timeSyncMode = getattr(opendnp3.TimeSyncMode,
+  "None")` (not `LAN` — `None` is a Python keyword, hence `getattr`), permanently, so this
+  task never runs on a process anything else depends on. Time sync is only ever exercised
+  via `POST /timesync/<name>`, which isolates it exactly like `/restart` does (Disable →
+  disposable worker with its own `timeSyncMode=LAN` connection → Enable). Full sequence
+  confirmed on the wire: FC21(Disable Unsol)→FC1(Read)→FC24(Record Current Time)→FC2
+  (Write, Group 50 Var 1)→FC20(Enable Unsol) — LAN mode uses Record Current Time, not
+  Delay Measure (FC23); that's for `NonLAN` mode's round-trip compensation.
 - **Phase 1 command-handler bugs fixed in Activity 2** (`src/components/dnp3_outstation.py`
   — only ever exercised once a control command is actually sent): (1) `ICommandHandler`'s
   pure virtual is `Start()`, not `Begin()` — the old name aborted the outstation on the

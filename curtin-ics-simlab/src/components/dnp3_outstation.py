@@ -151,15 +151,41 @@ class SolarCommandHandler(opendnp3.ICommandHandler):
 # ---------------------------------------------------------------------------
 # DNP3 Outstation Application callbacks
 # ---------------------------------------------------------------------------
+# Minimum interval between requesting a time sync. Real deployments resync far less
+# often (minutes to hours); short here so the behaviour is observable in a live demo —
+# see Group 50 note in CLAUDE.md for why this never fired before this was added.
+TIME_SYNC_INTERVAL_S = 30.0
+
+
 # PURPOSE: Outstation lifecycle callbacks required by opendnp3.IOutstationApplication
 class SolarOutstationApplication(opendnp3.IOutstationApplication):
+
+    def __init__(self):
+        super().__init__()
+        # None until first sync. GetApplicationIIN() below reads this every time the
+        # stack composes a response — that's the master's only trigger to ever run its
+        # LAN time-sync task (master.timeSyncMode=LAN only acts on IINBit.NEED_TIME).
+        self._last_sync_time = None
 
     def SupportsWriteAbsoluteTime(self):
         return True
 
-    def WriteAbsoluteTime(self, time):
-        logging.debug(f"Time sync received: {time}")
+    # PURPOSE: Receives the synchronised time from a master-initiated Group 50 Write;
+    # clears the NEED_TIME condition read by GetApplicationIIN() until the interval elapses again.
+    def WriteAbsoluteTime(self, timestamp):
+        logging.info(f"Time sync received: {timestamp}")
+        self._last_sync_time = time.time()
         return True
+
+    # PURPOSE: Reports NEED_TIME (IIN1.4) to the master once per TIME_SYNC_INTERVAL_S —
+    # without this, master.timeSyncMode=LAN never has a reason to run its sync task at all.
+    def GetApplicationIIN(self):
+        iin = opendnp3.ApplicationIIN()
+        iin.needTime = (
+            self._last_sync_time is None
+            or (time.time() - self._last_sync_time) > TIME_SYNC_INTERVAL_S
+        )
+        return iin
 
     def SupportsAssignClass(self):
         return False

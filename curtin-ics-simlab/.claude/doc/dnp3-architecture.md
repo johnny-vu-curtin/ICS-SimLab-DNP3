@@ -89,7 +89,7 @@ this table; real IEEE 1815 numbering used below:
 | FC   | Name                    | Required for              |
 |------|-------------------------|---------------------------|
 | 0x01 | Read                    | Class polls               |
-| 0x02 | Write                   | Time sync, control output |
+| 0x02 | Write                   | Time sync, control output — confirmed on wire 2026-11-11 (LAN time sync, Group 50 Var 1) |
 | 0x03 | Select                  | Select-Before-Operate (step 1) |
 | 0x04 | Operate                 | Select-Before-Operate (step 2) |
 | 0x05 | Direct Operate          | Control commands — confirmed on wire (not 0x03) |
@@ -98,6 +98,7 @@ this table; real IEEE 1815 numbering used below:
 | 0x0E | Warm Restart            | Attack: warm restart (not 0x07 — that's Immediate Freeze, unused here) |
 | 0x14 | Enable Unsolicited      | Normal operation — confirmed on wire |
 | 0x15 | Disable Unsolicited     | Attack: block events — confirmed on wire |
+| 0x18 | Record Current Time     | LAN time sync — confirmed on wire 2026-11-11 (part of the LAN sync sequence, not Delay Measure) |
 | 0x81 | Response                | All responses              |
 | 0x82 | Unsolicited Response    | Event-driven reporting — confirmed on wire |
 
@@ -161,7 +162,7 @@ support (Activity 2) vs. what `dnp3_master.py` / `dnp3_outstation.py` implement 
 | Group 12 CROB / Group 41 AO         | Implemented                                                                    |
 | FC 0x03/0x04 Select-Before-Operate  | Nominally present (`SolarCommandHandler.Select()` exists to satisfy the interface) but unconditionally returns `SUCCESS` — no real reservation/timeout state, so not meaningfully implemented |
 | FC 0x0E/0x0D Warm/Cold Restart      | **Implemented 2026-11-10** (`solar_plant_500kw` branch) — `WarmRestartSupport`/`ColdRestartSupport` return `SUPPORTED_DELAY_COARSE`; `WarmRestart()` logs and returns a delay; `ColdRestart()` exits the process after 2s so Docker's `restart: unless-stopped` policy (added to `build_dnp3_outstation_yaml()`) brings the container back up fresh. Master side: `POST /restart/<name>` `{"type":"warm"\|"cold"}`. **`Restart()`'s completion crashes the calling process exactly like `DirectOperate()`'s does** (confirmed live: `TaskCompletion.SUCCESS` on a warm restart killed `scada` the same `PyThreadState_Get` GIL fault) — same Disable/isolated-worker/Enable treatment as the command path. Verified live: warm + cold restart both land (outstation logs the request; `inverter_X`'s cold-restarted container uptime resets while its creation time doesn't, confirming Docker actually restarted it), `scada` stays up through both, confirmed on the wire (FC13/FC14 seen via tshark). |
-| Group 50 Time sync (Write)          | Stub only — `WriteAbsoluteTime()` logs and returns `True`; value is not stored or reused (needed for attack #7). Confirmed live 2026-11-09 that the automatic trigger never fires at all: `timeSyncMode=LAN` only acts when the master sees `IINBit.NEED_TIME`, and `SolarOutstationApplication` never overrides `GetApplicationIIN()` to set it — captured 90s/18 poll cycles with zero FC2/23/24 on the wire |
+| Group 50 Time sync (Write)          | **Partially implemented 2026-11-11** — `WriteAbsoluteTime()` logs the received time and marks the outstation synced (used to decide when to re-request); the value itself still isn't stored/reused for anything (needed for full attack #7). Trigger fixed: `GetApplicationIIN()` now reports `IINBit.NEED_TIME` until synced (previously never fired — see CLAUDE.md "Group 50 time sync never triggers" for the 2026-11-09 finding that led here). Confirmed live via `POST /timesync/<name>`: full LAN sync sequence FC21(Disable Unsol)→FC1(Read)→**FC24(Record Current Time)**→**FC2(Write, Group 50 Var 1)**→FC20(Enable Unsol), each answered FC129. **LAN mode uses Record Current Time, not Delay Measure (FC23)** — FC23 is for the `NonLAN` mode's round-trip delay compensation, not used here. **The task crashes the calling process** (uncaught C++ `pybind11::cast_error` → `terminate()` — not a catchable Python GIL fault like DirectOperate/Restart), so it must never run on the persistent polling master (`timeSyncMode` there is deliberately `None`, not `LAN`) — only exercised via the isolated `/timesync` worker. |
 | FC 0x14/0x15 Enable/Disable Unsolicited | **Implemented 2026-11-10** — previously these only ever appeared automatically on the master's own session startup; now exposed on-demand via `POST /unsolicited/<name>` `{"action":"enable"\|"disable"}`, using `master.PerformFunction()` with Class1/2/3 headers. No command-task involved (no callback param on `PerformFunction`), so — unlike Restart/DirectOperate — this does **not** crash the calling process; no isolation needed. Confirmed on the wire (FC20/FC21). |
 
 ---
