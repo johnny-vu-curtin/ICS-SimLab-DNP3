@@ -175,14 +175,17 @@ def get_unit(physical_value_name):
 
 # Author: Van Sanh Vu, Purpose: DNP3 development
 # FUNCTION: create_register_table_rows
-# PURPOSE:  Builds up the table rows for the component registers
-def create_register_table_rows(type, address, count, value, unit, response):
-    for name, register in response.items():
+# PURPOSE:  Builds up the table rows for the component registers, including the point's
+#           own name (the /registers dict key) so a row can be identified at a glance
+#           instead of only by its numeric address.
+def create_register_table_rows(name, type, address, count, value, unit, response):
+    for key, register in response.items():
+        name.append(key)
         type.append(register["type"])
         address.append(register["address"])
         count.append(register["count"])
         value.append(register["value"])
-        unit.append(get_unit(name))
+        unit.append(get_unit(key))
 
 
 
@@ -190,16 +193,55 @@ def create_register_table_rows(type, address, count, value, unit, response):
 # FUNCTION: create_register_table
 # PURPOSE:  Creates a dataframe for the component register table
 def create_register_table(response):
+    name = []
     type = []
     address = []
     count = []
     value = []
     unit = []
-    create_register_table_rows(type, address, count, value, unit, response)
+    create_register_table_rows(name, type, address, count, value, unit, response)
     dataframe = pd.DataFrame({
+            "name": name,
             "type": type,
             "address": address,
             "count": count,
+            "value": value,
+            "unit": unit
+        })
+    return dataframe.astype(str)
+
+
+
+# Author: Van Sanh Vu, Purpose: DNP3 development
+# FUNCTION: create_master_summary_table
+# PURPOSE:  Aggregates a DNP3 master's flattened multi-outstation registers (keys are
+#           "<outstation_name>.<physical_value>") into one row per physical value across
+#           the fleet — mean for analogue points, "<true_count>/<total>" fraction for
+#           binary points — so the SCADA view summarises all outstations instead of just
+#           repeating every outstation's own table under a different name.
+def create_master_summary_table(response):
+    groups = {}  # base physical-value name -> {"type": ..., "values": [...]}
+    for key, register in response.items():
+        base_name = key.rsplit(".", 1)[-1]
+        group = groups.setdefault(base_name, {"type": register["type"], "values": []})
+        group["values"].append(register["value"])
+
+    name, type, value, unit = [], [], [], []
+    for base_name, group in groups.items():
+        values = group["values"]
+        if group["type"] in ("binary_input", "binary_output"):
+            true_count = sum(1 for v in values if v)
+            value.append(f"{true_count}/{len(values)}")
+        else:
+            numeric_values = [float(v) for v in values]
+            value.append(round(sum(numeric_values) / len(numeric_values), 3))
+        name.append(base_name)
+        type.append(group["type"])
+        unit.append(get_unit(base_name))
+
+    dataframe = pd.DataFrame({
+            "name": name,
+            "type": type,
             "value": value,
             "unit": unit
         })
@@ -386,10 +428,12 @@ def main():
 
         # Author: Van Sanh Vu, Purpose: DNP3 development
         # PURPOSE: Polls each DNP3 master's REST API and refreshes its dashboard table
+        # with the fleet-wide summary (mean/fraction across outstations) rather than
+        # every outstation's raw rows — those are already shown in their own tables below.
         for master, info in dnp3_master_info.items():
             try:
                 r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
-                st_dnp3_masters[master].dataframe(create_register_table(r))
+                st_dnp3_masters[master].dataframe(create_master_summary_table(r))
             except Exception:
                 pass
 
