@@ -364,8 +364,10 @@ def main():
     # PURPOSE: Renders one dashboard tile per DNP3 outstation (inverter) container
     if dnp3_outstation_info:
         st.header("DNP3 Outstations (Inverters)", divider="blue")
-        col1, col2, col3, col4 = st.columns(4)
-        columns = {1: col1, 2: col2, 3: col3, 4: col4}
+        # 3 columns (not 4): with 5 inverters, 4 columns leaves inverter_5 alone on its
+        # own row — 3 columns puts inverter_4 and inverter_5 together on row 2 instead.
+        col1, col2, col3 = st.columns(3)
+        columns = {1: col1, 2: col2, 3: col3}
         column_switcher = 1
         st_dnp3_outstations = {}
         for outstation in dnp3_outstation_info:
@@ -431,7 +433,10 @@ def main():
         for master, info in dnp3_master_info.items():
             try:
                 r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
-                st_dnp3_masters[master].dataframe(create_master_summary_table(r))
+                # width/height="content": size to the data instead of the Streamlit
+                # 1.67 defaults (width stretches to fill the container; height shows
+                # only 10 rows and scrolls past that — both wrong for a fixed 13-row table).
+                st_dnp3_masters[master].dataframe(create_master_summary_table(r), width="content", height="content")
             except Exception:
                 pass
 
@@ -440,7 +445,7 @@ def main():
         for outstation, info in dnp3_outstation_info.items():
             try:
                 r = requests.get(f"http://{info['ip']}:1111/registers", timeout=2).json()
-                st_dnp3_outstations[outstation].dataframe(create_register_table(r))
+                st_dnp3_outstations[outstation].dataframe(create_register_table(r), width="content", height="content")
             except Exception:
                 pass
 
